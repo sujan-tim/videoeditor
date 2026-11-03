@@ -1,4 +1,11 @@
-export const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(/\/$/, "");
+// Empty = same origin (the deployed single-service build). Set NEXT_PUBLIC_API_URL for `npm run dev`.
+function defaultApiBase(): string {
+  if (process.env.NEXT_PUBLIC_API_URL) return process.env.NEXT_PUBLIC_API_URL;
+  // `npm run dev` serves on :3000 while the backend runs on :8000
+  if (typeof window !== "undefined" && window.location.port === "3000") return `${window.location.protocol}//${window.location.hostname}:8000`;
+  return "";
+}
+export const API_BASE = defaultApiBase().replace(/\/$/, "");
 
 export type Source = {
   id: string;
@@ -140,6 +147,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  session: () => request<{ auth_required: boolean; authenticated: boolean }>("/api/session"),
+  login: (password: string) => request<{ ok: boolean }>("/api/login", { method: "POST", body: JSON.stringify({ password }) }),
   health: () => request<Health>("/api/health"),
   listProjects: () => request<ProjectListItem[]>("/api/projects"),
   createProject: (name: string) => request<Project>("/api/projects", { method: "POST", body: JSON.stringify({ name }) }),

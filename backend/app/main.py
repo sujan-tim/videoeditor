@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config
+from . import auth, config
 from .agent import agent
 from .jobs import jobs
 from .media import analysis, ffmpeg
@@ -27,6 +27,8 @@ log = logging.getLogger("api")
 app = FastAPI(title="AI Video Editor", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=config.CORS_ORIGINS, allow_credentials=False,
                    allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(auth.AuthMiddleware)
+app.include_router(auth.router)
 app.mount("/files", StaticFiles(directory=store.root), name="files")
 
 
@@ -286,3 +288,10 @@ def delete_project(project_id: str) -> dict:
         f.chmod(0o644)
     shutil.rmtree(pdir)
     return {"ok": True}
+
+
+# ---- dashboard -----------------------------------------------------------------
+# In a deployment the static Next.js build is served from the same origin.
+_FRONTEND = Path(config.FRONTEND_DIR)
+if (_FRONTEND / "index.html").exists():
+    app.mount("/", StaticFiles(directory=_FRONTEND, html=True), name="dashboard")
