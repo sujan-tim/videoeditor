@@ -1,0 +1,16 @@
+# secrets
+.env
+backend/.env
+frontend/.env.local
+# runtime data (uploads, renders)
+backend/data/
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+# node
+frontend/node_modules/
+frontend/.next/
+frontend/next-env.d.ts
