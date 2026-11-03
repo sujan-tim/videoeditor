@@ -1,3 +1,13 @@
+---
+title: AI Video Editor
+emoji: 🎬
+colorFrom: purple
+colorTo: indigo
+sdk: docker
+app_port: 8000
+pinned: false
+---
+
 # AI Video Editor
 
 Upload footage, describe the edit in plain language, and let Claude plan and apply it with real
@@ -53,6 +63,25 @@ Run the backend tests (they generate their own footage and do not call Claude):
 ```bash
 cd backend && python -m pytest -q
 ```
+
+## Deploy as a website
+
+The repo builds into one Docker image: FastAPI serves the API and the static dashboard from the
+same address, with FFmpeg included. Set a password so a public URL cannot spend your API key.
+
+**Render (free tier):**
+1. Push this folder to a GitHub repo.
+2. On render.com: New > Blueprint, connect GitHub, pick the repo. It reads `render.yaml`.
+3. Fill in `ANTHROPIC_API_KEY` and `APP_PASSWORD` when asked, then Apply. The first build takes about 10 minutes.
+4. Open the `https://<name>.onrender.com` link and sign in.
+
+The free plan has 0.1 CPU and 512 MB of RAM: fine for short clips, slow for long ones. It sleeps after
+15 minutes without visits (the next visit takes about a minute to wake), and files are wiped on every
+restart or deploy, so download exports right away. For real use, move the same image to a bigger
+plan or a free Oracle Cloud VM (volume at `/data`, port `$PORT`).
+
+Local check of the deployed layout without Docker: `cd frontend && npm run build`, then start the backend
+as usual and open http://localhost:8000.
 
 ## How it fits together
 
@@ -117,7 +146,8 @@ The API key is only read by the backend and never sent to the browser.
 
 ## Known limits
 
-- Single-user and local: jobs run in a thread pool in the API process and are not resumed after a restart.
+- One shared password, not user accounts: everyone who signs in sees the same projects.
+- Single server: jobs run in a thread pool in the API process and are not resumed after a restart.
 - Whisper runs on CPU by default; set `WHISPER_DEVICE=cuda` with a GPU, or `WHISPER_MODEL=base` for speed.
 - Previews re-render the whole timeline at 540p; very long projects will want segment caching.
 - Frames Claude looks at are kept in the conversation history, which raises token use on long sessions.

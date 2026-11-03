@@ -35,6 +35,8 @@ AGENT_MAX_ROUNDS = int(os.environ.get("AGENT_MAX_ROUNDS", "25"))
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "small")
 WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "auto")
 
+FRONTEND_DIR = os.environ.get("FRONTEND_DIR", str(BACKEND_DIR.parent / "frontend" / "out"))
+
 CORS_ORIGINS = [o.strip() for o in os.environ.get(
     "CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",") if o.strip()]
 

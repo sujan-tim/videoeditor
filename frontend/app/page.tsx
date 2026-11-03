@@ -24,6 +24,7 @@ export default function Dashboard() {
   const [playhead, setPlayhead] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
   const [autoPreview, setAutoPreview] = useState(true);
+  const [needLogin, setNeedLogin] = useState(false);
   const video = useRef<HTMLVideoElement>(null);
   const attempted = useRef<number>(-1);
 
@@ -36,6 +37,11 @@ export default function Dashboard() {
   useEffect(() => {
     (async () => {
       try {
+        const session = await api.session();
+        if (session.auth_required && !session.authenticated) {
+          setNeedLogin(true);
+          return;
+        }
         setHealth(await api.health());
         const list = await api.listProjects();
         setProjects(list);
@@ -119,6 +125,7 @@ export default function Dashboard() {
     setProjectId(p.id);
   }
 
+  if (needLogin) return <Login />;
   if (backendDown && !project) {
     return (
       <main className="flex h-screen items-center justify-center bg-zinc-950 p-6 text-zinc-300">
@@ -126,7 +133,7 @@ export default function Dashboard() {
           <h1 className="text-lg font-semibold text-zinc-100">Backend not reachable</h1>
           <p>
             Start it with <code className="rounded bg-zinc-800 px-1">uvicorn app.main:app --port 8000</code> in <code>backend/</code>, then reload. This page expects it at{" "}
-            <code>{process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}</code>.
+            <code>{process.env.NEXT_PUBLIC_API_URL || "the same address as this page"}</code>.
           </p>
         </div>
       </main>
@@ -195,6 +202,46 @@ export default function Dashboard() {
       </div>
 
       {toast && <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-md border border-red-800 bg-red-950 px-4 py-2 text-sm text-red-100 shadow-lg">{toast}</div>}
+    </main>
+  );
+}
+
+function Login() {
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  return (
+    <main className="flex h-screen items-center justify-center bg-zinc-950 p-6 text-zinc-200">
+      <form
+        className="w-full max-w-xs space-y-3 rounded-lg border border-zinc-800 bg-zinc-900 p-5"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          setBusy(true);
+          try {
+            await api.login(password);
+            window.location.reload();
+          } catch (err) {
+            setError((err as Error).message);
+            setBusy(false);
+          }
+        }}
+      >
+        <div className="text-sm font-semibold">
+          <span className="text-violet-400">◆</span> AI Video Editor
+        </div>
+        <input
+          type="password"
+          autoFocus
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="Password"
+          className="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-violet-500"
+        />
+        {error && <div className="text-xs text-red-300">{error}</div>}
+        <Button variant="primary" className="w-full py-2" disabled={busy || !password}>
+          {busy ? "Checking…" : "Sign in"}
+        </Button>
+      </form>
     </main>
   );
 }

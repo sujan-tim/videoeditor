@@ -1,0 +1,19 @@
+# Render Blueprint: New > Blueprint > pick this repo.
+services:
+  - type: web
+    name: ai-video-editor
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: APP_PASSWORD
+        sync: false
+      - key: APP_SECRET
+        generateValue: true
+      - key: WHISPER_MODEL
+        value: tiny   # the free plan has 512 MB of RAM
+      - key: VIDEO_EDITOR_DATA_DIR
+        value: /tmp/data
