@@ -30,3 +30,20 @@ export function detectOS(): Download["os"] | null {
   if (/Linux|X11/i.test(ua) && !/Android/i.test(ua)) return "linux";
   return null;
 }
+
+// A request typed on the landing page waits here until the editor's chat box picks it up.
+const PENDING = "pendingPrompt";
+export function savePendingPrompt(text: string) {
+  try {
+    localStorage.setItem(PENDING, text);
+  } catch {}
+}
+export function takePendingPrompt(): string {
+  try {
+    const t = localStorage.getItem(PENDING) || "";
+    localStorage.removeItem(PENDING);
+    return t;
+  } catch {
+    return "";
+  }
+}

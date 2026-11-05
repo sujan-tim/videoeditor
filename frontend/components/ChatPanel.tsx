@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { takePendingPrompt } from "@/lib/site";
 import { api, fileUrl, type ChatMessage, type Job, type Project } from "@/lib/api";
 import { Badge, Button } from "./ui";
 
@@ -27,6 +28,11 @@ export function ChatPanel({ project, chat, agentJob, aiReady, desktop, onKeySave
   const [approval, setApproval] = useState(false);
   const end = useRef<HTMLDivElement>(null);
   const working = agentJob && (agentJob.status === "queued" || agentJob.status === "running");
+
+  useEffect(() => {
+    const pending = takePendingPrompt();
+    if (pending) setText(pending);
+  }, []);
 
   useEffect(() => {
     end.current?.scrollIntoView({ behavior: "smooth" });
