@@ -59,7 +59,7 @@ cp .env.local.example .env.local     # only needed if the backend is not on loca
 npm run dev                          # http://localhost:3000
 ```
 
-Open http://localhost:3000, drop a video in the Media panel, and try:
+Open http://localhost:3000/edit/ (the home page is the public landing page), drop a video in the Media panel, and try:
 "Remove unnecessary pauses, add subtitles, make the video 9:16, and prepare it for Instagram Reels."
 
 Run the backend tests (they generate their own footage and fake the AI, so no key or network is needed):
@@ -87,6 +87,33 @@ plan or a free Oracle Cloud VM (volume at `/data`, port `$PORT`).
 
 Local check of the deployed layout without Docker: `cd frontend && npm run build`, then start the backend
 as usual and open http://localhost:8000.
+
+## Desktop app
+
+`desktop/` wraps the same editor in an Electron app that runs everything on the user's computer: the
+Python backend is bundled with PyInstaller (`backend/desktop.spec`), FFmpeg comes from
+`ffmpeg-static`, and the window loads the editor from `http://127.0.0.1:<random port>/edit/`.
+Projects live in the app's data folder (Help > Open data folder). The AI editor asks for the user's own
+free Groq key and stores it only on that computer.
+
+Releases are built by GitHub Actions (`.github/workflows/desktop.yml`) on Windows, macOS (Apple silicon
+and Intel) and Linux. To publish a new version:
+
+```bash
+git tag v1.0.1 && git push origin v1.0.1
+```
+
+The website's download buttons point at `releases/latest`, so they pick up each new release. The
+installers are not code-signed (that needs paid certificates), so Windows and macOS show a one-time
+warning.
+
+Build it locally (on the OS you are targeting):
+
+```bash
+cd backend && pip install -r requirements.txt pyinstaller && pyinstaller desktop.spec
+cd ../frontend && npm ci && npm run build
+cd ../desktop && npm ci && npm run dist      # installer in desktop/dist/
+```
 
 ## How it fits together
 

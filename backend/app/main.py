@@ -82,13 +82,48 @@ def health() -> dict:
             "whisper_model": config.WHISPER_MODEL, "ai_provider": config.ai_provider(),
             "ai_configured": config.ai_configured(), "ai_model": config.ai_model(),
             "claude_configured": config.anthropic_configured(), "claude_model": config.CLAUDE_MODEL,
-            "overlay_font": config.overlay_font(),
+            "overlay_font": config.overlay_font(), "desktop": config.DESKTOP_MODE,
             "tools": len(registry.all())}
 
 
 @app.get("/api/tools")
 def list_tools() -> list[dict]:
     return registry.describe()
+
+
+# ---- desktop settings ---------------------------------------------------------------
+class DesktopSettings(BaseModel):
+    groq_api_key: str = Field("", max_length=200)
+
+
+@app.post("/api/settings")
+def save_settings(body: DesktopSettings) -> dict:
+    """Desktop app only: store the user's own Groq key on their computer."""
+    import json
+    import os
+
+    if not config.DESKTOP_MODE:
+        raise HTTPException(403, "Settings are set by the server administrator here.")
+    key = body.groq_api_key.strip()
+    if key and not key.startswith("gsk_"):
+        raise HTTPException(400, "That does not look like a Groq key (they start with gsk_).")
+    data = {}
+    if config.SETTINGS_FILE.exists():
+        try:
+            data = json.loads(config.SETTINGS_FILE.read_text())
+        except ValueError:
+            data = {}
+    data["GROQ_API_KEY"] = key
+    config.SETTINGS_FILE.write_text(json.dumps(data))
+    try:
+        config.SETTINGS_FILE.chmod(0o600)
+    except OSError:
+        pass
+    if key:
+        os.environ["GROQ_API_KEY"] = key
+    else:
+        os.environ.pop("GROQ_API_KEY", None)
+    return {"ok": True, "ai_configured": config.ai_configured()}
 
 
 # ---- projects ------------------------------------------------------------------

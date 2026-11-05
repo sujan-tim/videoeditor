@@ -16,11 +16,13 @@ type Props = {
   chat: ChatMessage[];
   agentJob: Job | undefined;
   aiReady: boolean;
+  desktop?: boolean;
+  onKeySaved?: () => void;
   onSent: () => void;
   onError: (e: string) => void;
 };
 
-export function ChatPanel({ project, chat, agentJob, aiReady, onSent, onError }: Props) {
+export function ChatPanel({ project, chat, agentJob, aiReady, desktop, onKeySaved, onSent, onError }: Props) {
   const [text, setText] = useState("");
   const [approval, setApproval] = useState(false);
   const end = useRef<HTMLDivElement>(null);
@@ -44,7 +46,8 @@ export function ChatPanel({ project, chat, agentJob, aiReady, onSent, onError }:
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
-        {!aiReady && (
+        {!aiReady && desktop && <KeyForm onSaved={onKeySaved} onError={onError} />}
+        {!aiReady && !desktop && (
           <div className="rounded-md border border-amber-800 bg-amber-950/40 p-2 text-xs leading-5 text-amber-200">
             The AI editor needs a free Groq key. Create one at <a className="underline" href="https://console.groq.com/keys" target="_blank" rel="noreferrer">console.groq.com/keys</a>, then set <code>GROQ_API_KEY</code> in your Render environment (or <code>backend/.env</code>) and restart. Manual editing works without it.
           </div>
@@ -157,5 +160,42 @@ function Message({ m, projectId }: { m: ChatMessage; projectId: string }) {
       )}
       {!m.ok && <Badge tone="red">the agent saw this error and can retry</Badge>}
     </details>
+  );
+}
+
+function KeyForm({ onSaved, onError }: { onSaved?: () => void; onError: (e: string) => void }) {
+  const [key, setKey] = useState("");
+  const [busy, setBusy] = useState(false);
+  return (
+    <form
+      className="space-y-2 rounded-md border border-violet-800 bg-violet-950/30 p-3 text-xs leading-5 text-zinc-300"
+      onSubmit={async (e) => {
+        e.preventDefault();
+        setBusy(true);
+        try {
+          await api.saveSettings(key);
+          setKey("");
+          onSaved?.();
+        } catch (err) {
+          onError((err as Error).message);
+        }
+        setBusy(false);
+      }}
+    >
+      <div className="font-medium text-zinc-100">Turn on the AI editor (free)</div>
+      <p>
+        Create a free key at{" "}
+        <a className="underline" href="https://console.groq.com/keys" target="_blank" rel="noreferrer">
+          console.groq.com/keys
+        </a>{" "}
+        and paste it here. It is saved only on this computer.
+      </p>
+      <div className="flex gap-2">
+        <input value={key} onChange={(e) => setKey(e.target.value)} type="password" placeholder="gsk_..." className="min-w-0 flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 outline-none focus:border-violet-500" data-testid="groq-key" />
+        <Button variant="primary" disabled={busy || !key.trim()}>
+          Save
+        </Button>
+      </div>
+    </form>
   );
 }

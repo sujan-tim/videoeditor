@@ -1,0 +1,108 @@
+# Builds the desktop app for Windows, macOS (Apple silicon and Intel) and Linux.
+# Push a tag like v1.0.0 to publish a GitHub Release with all installers; the website's
+# download buttons always point at the latest release. "Run workflow" builds without releasing.
+name: Desktop app
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: --win
+          - os: macos-14          # Apple silicon
+            target: --mac --arm64
+          - os: macos-15-intel    # Intel
+            target: --mac --x64
+          - os: ubuntu-22.04
+            target: --linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Bundle the editor backend
+        working-directory: backend
+        run: |
+          python -m pip install -r requirements.txt pyinstaller==6.22.3
+          pyinstaller --noconfirm desktop.spec
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build the editor UI
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: desktop
+        shell: bash
+        run: npm version --no-git-tag-version "${GITHUB_REF_NAME#v}"
+
+      - name: Ad-hoc sign the bundled programs (Apple silicon refuses unsigned code)
+        if: runner.os == 'macOS'
+        run: |
+          find backend/dist/videoeditor-server -type f \( -perm -u+x -o -name "*.dylib" -o -name "*.so" \) -exec codesign --force -s - {} \; 2>/dev/null || true
+
+      - name: Build the installer
+        working-directory: desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"   # unsigned builds
+        run: |
+          npm ci
+          npm run prepare-bin
+          npx electron-builder ${{ matrix.target }} --publish never
+
+      - name: Check the Mac app is signed (ad-hoc)
+        if: runner.os == 'macOS'
+        working-directory: desktop
+        run: |
+          APP=$(find dist -maxdepth 2 -name "*.app" | head -1)
+          codesign --verify --deep --verbose=1 "$APP"
+          codesign --verify --verbose=1 "$APP/Contents/Resources/bin/ffmpeg" "$APP/Contents/Resources/backend/videoeditor-server"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.os }}
+          path: |
+            desktop/dist/*.exe
+            desktop/dist/*.dmg
+            desktop/dist/*.AppImage
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: installers
+          merge-multiple: true
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la installers
+          gh release create "$GITHUB_REF_NAME" installers/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "AI Video Editor $GITHUB_REF_NAME" \
+            --notes "Download the installer for your computer below, or from the website. The apps are not code-signed yet: on Windows choose More info, then Run anyway; on a Mac open the app once, then go to System Settings > Privacy & Security and click Open Anyway."

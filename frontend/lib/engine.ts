@@ -248,9 +248,13 @@ export function drawOverlay(ctx: CanvasRenderingContext2D, ov: TextOverlay, t: n
   ctx.globalAlpha = alpha;
   let fill = colorHex(ov.color);
   if (ov.style === "box" || ov.style === "highlight") {
+    // one box per line, as the renderer (libass) draws it
     const pad = Math.max(4, Math.floor(base * (ov.style === "box" ? 0.35 : 0.3)));
     ctx.fillStyle = ov.style === "box" ? "rgba(0,0,0,0.55)" : fill;
-    ctx.fillRect(x - pad, y - pad, tw + pad * 2, th + pad * 2);
+    lines.forEach((_, i) => {
+      const lx = ov.x != null ? x + (tw - widths[i]) / 2 : (W - widths[i]) / 2;
+      ctx.fillRect(lx - pad, y + i * (lineH + spacing) - pad * 0.4, widths[i] + pad * 2, lineH + pad * 0.8);
+    });
     if (ov.style === "highlight") fill = fill.toUpperCase() === "#000000" ? "#FFFFFF" : "#000000";
   }
   if (ov.style === "shadow") {

@@ -335,64 +335,73 @@ def _video_fit(label_in: str, label_out: str, width: int, height: int, plan: Edi
     return [f"[{label_in}]{','.join(chain)}[{label_out}]"]
 
 
-# ---- text overlays (drawtext) -------------------------------------------------
-def _overlay_filters(plan: EditPlan, width: int, height: int, scale: float, cache: Path,
-                     font_rel: str) -> list[str]:
-    out = []
-    for k, ov in enumerate(plan.overlays):
+# ---- text overlays (rendered with libass, like captions) ------------------------
+def build_overlay_ass(plan: EditPlan, width: int, height: int) -> str:
+    """Text overlays as ASS events: styles, positions and animations without needing drawtext,
+    which some FFmpeg builds lack."""
+    scale = min(width, height) / 1080
+    header = (
+        "[Script Info]\nScriptType: v4.00+\n"
+        f"PlayResX: {width}\nPlayResY: {height}\nWrapStyle: 2\nScaledBorderAndShadow: yes\n\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
+        "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, "
+        "Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        "Style: Text,DejaVu Sans,64,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1\n"
+        "Style: Box,DejaVu Sans,64,&H00FFFFFF,&H00FFFFFF,&H73000000,&H80000000,-1,0,0,0,100,100,0,0,3,0,0,5,0,0,0,1\n\n"
+        "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    )
+    lines = []
+    for ov in plan.overlays:
         size = max(10, int(ov.font_size * scale))
         max_chars = max(8, int(width * 0.88 / (size * 0.58)))
         s, e = ov.start, ov.end
         dur = max(0.05, e - s)
-        a = min(0.3, dur / 3)
-        if ov.x is not None:
-            x = f"w*{ov.x:.4f}-text_w/2"
+        fade_ms = int(min(0.3, dur / 3) * 1000)
+        if ov.x is not None or ov.y is not None:
+            an, x, y = 5, width * (ov.x if ov.x is not None else 0.5), height * (ov.y if ov.y is not None else 0.5)
         else:
-            x = "(w-text_w)/2"
-        if ov.y is not None:
-            y = f"h*{ov.y:.4f}-text_h/2"
-        else:
-            y = {"top": "h*0.08", "center": "(h-text_h)/2", "bottom": "h*0.78-text_h"}[ov.position]
-        alpha = "1"
-        fontsize = str(size)
-        if ov.animation in ("fade", "slide_up", "pop", "typewriter"):
-            alpha = f"min(1\\,max(0\\,min((t-{s:.3f})/{a:.3f}\\,({e:.3f}-t)/{a:.3f})))"
-        if ov.animation == "slide_up":
-            y = f"{y}+h*0.04*max(0\\,1-(t-{s:.3f})/0.35)"
-        if ov.animation == "pop":
-            fontsize = f"{size}*min(1\\,0.6+0.4*max(0\\,(t-{s:.3f}))/0.18)"
-        style = ov.style
+            an, x, y = {"top": (8, width / 2, height * 0.08), "center": (5, width / 2, height / 2),
+                        "bottom": (2, width / 2, height * 0.78)}[ov.position]
         fc = color_hex(ov.color)
-        if style == "box":
-            deco = f":box=1:boxcolor=black@0.55:boxborderw={max(4, int(size * 0.35))}"
-        elif style == "highlight":
-            deco = f":box=1:boxcolor=0x{fc}@0.95:boxborderw={max(4, int(size * 0.3))}"
-            fc = "000000" if fc.upper() not in ("000000",) else "FFFFFF"
-        elif style == "outline":
-            deco = f":borderw={max(2, int(size * 0.08))}:bordercolor=black"
-        elif style == "shadow":
-            deco = f":shadowx={max(1, int(size * 0.05))}:shadowy={max(1, int(size * 0.05))}:shadowcolor=black@0.75"
+        style = "Box" if ov.style in ("box", "highlight") else "Text"
+        tags = [f"\\an{an}", f"\\fs{size}", f"\\1c{_ass_color(fc)}&"]
+        if ov.style == "box":
+            tags += [f"\\bord{max(4, int(size * 0.35))}", "\\3c&H000000&", "\\3a&H73&", "\\shad0"]
+        elif ov.style == "highlight":
+            text_col = "FFFFFF" if fc.upper() == "000000" else "000000"
+            tags = [f"\\an{an}", f"\\fs{size}", f"\\1c{_ass_color(text_col)}&",
+                    f"\\bord{max(4, int(size * 0.3))}", f"\\3c{_ass_color(fc)}&", "\\3a&H00&", "\\shad0"]
+        elif ov.style == "outline":
+            tags += [f"\\bord{max(2, int(size * 0.08))}", "\\3c&H000000&", "\\shad0"]
+        elif ov.style == "shadow":
+            tags += ["\\bord0", f"\\shad{max(1, int(size * 0.05))}", "\\4c&H000000&", "\\4a&H40&"]
         else:
-            deco = ""
-        text = wrap_text(ov.text, max_chars)
-        steps = [(text, s, e)]
+            tags += ["\\bord0", "\\shad0"]
+        if ov.animation == "slide_up":
+            tags.append(f"\\move({x:.0f},{y + height * 0.04:.0f},{x:.0f},{y:.0f},0,350)")
+        else:
+            tags.append(f"\\pos({x:.0f},{y:.0f})")
+        if ov.animation == "pop":
+            tags.append("\\fscx60\\fscy60\\t(0,180,\\fscx100\\fscy100)")
+        text = "\\N".join(_ass_escape(line) for line in wrap_text(ov.text, max_chars).split("\n"))
+        steps = [(text, s, e, True, True)]
         if ov.animation == "typewriter":
-            words = text.split(" ")
+            words = wrap_text(ov.text, max_chars).replace("\n", " ").split(" ")
             if 1 < len(words) <= 16:
                 reveal = min(dur * 0.6, 0.12 * len(words))
                 steps = []
                 for i in range(1, len(words) + 1):
                     t0 = s + reveal * (i - 1) / len(words)
                     t1 = s + reveal * i / len(words) if i < len(words) else e
-                    steps.append((" ".join(words[:i]), t0, t1))
-        for j, (txt, t0, t1) in enumerate(steps):
-            tfile = cache / f"overlay_{k}_{j}.txt"
-            tfile.write_text(txt)
-            out.append(
-                f"drawtext=fontfile={font_rel}:textfile=cache/{tfile.name}:expansion=none"
-                f":fontsize='{fontsize}':fontcolor=0x{fc}:alpha='{alpha}':line_spacing={int(size * 0.25)}"
-                f":x={x}:y={y}{deco}:enable='between(t,{t0:.3f},{t1:.3f})'")
-    return out
+                    part = "\\N".join(_ass_escape(line) for line in wrap_text(" ".join(words[:i]), max_chars).split("\n"))
+                    steps.append((part, t0, t1, i == 1, i == len(words)))
+        for txt, t0, t1, first, last in steps:
+            fad = ""
+            if ov.animation != "none":
+                fad = f"\\fad({fade_ms if first else 0},{fade_ms if last else 0})"
+            lines.append(f"Dialogue: 1,{_ass_time(t0)},{_ass_time(t1)},{style},,0,0,0,,{{{''.join(tags)}{fad}}}{txt}")
+    return header + "\n".join(lines) + "\n"
 
 
 # ---- compile -------------------------------------------------------------------
@@ -573,17 +582,18 @@ def compile_plan(project: Project, plan: EditPlan, project_dir: Path, out_rel: s
                        + f"amix=inputs={1 + len(mix_inputs)}:duration=first:dropout_transition=0:normalize=0[amixed]")
         acur = "amixed"
 
-    # -- text overlays and subtitles ---------------------------------------------------
+    # -- text overlays and subtitles (both drawn by libass from generated files) ---------
     vchain: list[str] = []
     font = config.overlay_font()
-    if plan.overlays:
-        if font is None:
-            warnings.append("No TTF font found for text overlays; set OVERLAY_FONT.")
-        else:
-            local_font = cache / f"overlay_font{Path(font).suffix}"
-            if not local_font.exists():
-                shutil.copy(font, local_font)
-            vchain += _overlay_filters(plan, width, height, scale, cache, f"cache/{local_font.name}")
+    fonts_opt = ""
+    if font is not None:
+        # Ship the font next to the .ass files so libass finds it on any system.
+        fonts = cache / "fonts"
+        fonts.mkdir(exist_ok=True)
+        target = fonts / Path(font).name
+        if not target.exists():
+            shutil.copy(font, target)
+        fonts_opt = ":fontsdir=cache/fonts"
     if plan.subtitles.enabled:
         words, missing = timeline_words(project, plan, project_dir)
         if missing:
@@ -591,7 +601,11 @@ def compile_plan(project: Project, plan: EditPlan, project_dir: Path, out_rel: s
         if words:
             sub_file = cache / "subtitles.ass"
             sub_file.write_text(build_ass(plan, words, width, height))
-            vchain.append(f"ass=cache/{sub_file.name}")
+            vchain.append(f"ass=cache/{sub_file.name}{fonts_opt}")
+    if plan.overlays:
+        text_file = cache / "overlays.ass"
+        text_file.write_text(build_overlay_ass(plan, width, height))
+        vchain.append(f"ass=cache/{text_file.name}{fonts_opt}")
     vchain.append("format=yuv420p")
     filters.append(f"[{vcur}]{','.join(vchain)}[vout]")
 

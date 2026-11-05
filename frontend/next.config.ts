@@ -4,6 +4,7 @@ import type { NextConfig } from "next";
 // so the whole app deploys as one service. `npm run dev` still works for local work.
 const nextConfig: NextConfig = {
   output: "export",
+  trailingSlash: true, // /edit/ -> edit/index.html, served as-is by FastAPI and the desktop app
   images: { unoptimized: true },
   turbopack: {
     rules: {

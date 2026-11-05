@@ -25,6 +25,27 @@ _load_dotenv()
 DATA_DIR = Path(os.environ.get("VIDEO_EDITOR_DATA_DIR", BACKEND_DIR / "data")).resolve()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
+# Desktop app: settings the user enters in the app (like their Groq key) live in the data folder.
+DESKTOP_MODE = os.environ.get("DESKTOP_MODE", "") == "1"
+SETTINGS_FILE = DATA_DIR / "settings.json"
+DESKTOP_SETTING_KEYS = ("GROQ_API_KEY", "GROQ_MODEL")
+
+
+def _load_desktop_settings() -> None:
+    import json
+
+    if not (DESKTOP_MODE and SETTINGS_FILE.exists()):
+        return
+    try:
+        for k, v in json.loads(SETTINGS_FILE.read_text()).items():
+            if k in DESKTOP_SETTING_KEYS and isinstance(v, str) and v:
+                os.environ[k] = v
+    except (ValueError, OSError):
+        pass
+
+
+_load_desktop_settings()
+
 FFMPEG = os.environ.get("FFMPEG_BIN", shutil.which("ffmpeg") or "ffmpeg")
 FFPROBE = os.environ.get("FFPROBE_BIN", shutil.which("ffprobe") or "ffprobe")
 

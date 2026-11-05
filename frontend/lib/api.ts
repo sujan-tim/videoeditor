@@ -209,6 +209,7 @@ export type Health = {
   ai_configured: boolean;
   ai_provider: string;
   ai_model: string;
+  desktop?: boolean;
   tools: number;
 };
 
@@ -248,6 +249,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ args }),
     }),
+  saveSettings: (groq_api_key: string) => request<{ ok: boolean; ai_configured: boolean }>("/api/settings", { method: "POST", body: JSON.stringify({ groq_api_key }) }),
   undo: (id: string) => request<Project>(`/api/projects/${id}/undo`, { method: "POST" }),
   redo: (id: string) => request<Project>(`/api/projects/${id}/redo`, { method: "POST" }),
   captions: (id: string) => request<Word[]>(`/api/projects/${id}/captions`),

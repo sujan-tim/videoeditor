@@ -1,0 +1,95 @@
+{
+  "name": "ai-video-editor",
+  "productName": "AI Video Editor",
+  "version": "1.0.0",
+  "description": "Edit videos on your own computer, by hand or by describing what you want.",
+  "author": "sujan-tim",
+  "license": "UNLICENSED",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "node scripts/prepare-bin.js && electron-builder --publish never",
+    "release": "node scripts/prepare-bin.js && electron-builder --publish always",
+    "prepare-bin": "node scripts/prepare-bin.js"
+  },
+  "devDependencies": {
+    "electron": "44.9.0",
+    "electron-builder": "26.17.0",
+    "ffmpeg-static": "5.3.0",
+    "ffprobe-static": "3.1.0"
+  },
+  "build": {
+    "appId": "com.sujantim.aivideoeditor",
+    "productName": "AI Video Editor",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "loading.html",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../backend/dist/videoeditor-server",
+        "to": "backend"
+      },
+      {
+        "from": "../frontend/out",
+        "to": "frontend"
+      },
+      {
+        "from": "assets/DejaVuSans-Bold.ttf",
+        "to": "fonts/DejaVuSans-Bold.ttf"
+      },
+      {
+        "from": "bin",
+        "to": "bin"
+      }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "sujan-tim",
+        "repo": "videoeditor",
+        "releaseType": "release"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "AI-Video-Editor-Setup-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.video",
+      "identity": "-",
+      "artifactName": "AI-Video-Editor-mac-${arch}.${ext}"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "AudioVideo",
+      "artifactName": "AI-Video-Editor-linux-${arch}.${ext}"
+    }
+  }
+}

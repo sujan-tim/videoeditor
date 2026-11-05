@@ -297,7 +297,7 @@ export function Timeline({ project, plan, selection, onSelect, run, setDraft, on
             >
               {ticks.map((t) => (
                 <div key={t} className="absolute top-0 h-full border-l border-zinc-700/70 pl-1 text-[9px] leading-5 text-zinc-500" style={{ left: X(t) }}>
-                  {fmtTC(t).slice(0, 5)}
+                  {t % 1 ? `${t.toFixed(1)}s` : fmtTC(t).slice(0, 5)}
                 </div>
               ))}
             </div>
