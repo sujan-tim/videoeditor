@@ -1,12 +1,18 @@
 # Builds the desktop app for Windows, macOS (Apple silicon and Intel) and Linux.
-# Push a tag like v1.0.0 to publish a GitHub Release with all installers; the website's
-# download buttons always point at the latest release. "Run workflow" builds without releasing.
+# Publish a release either by pushing a tag like v1.0.0, or from the Actions tab with
+# "Run workflow" and a version (e.g. 1.0.1). Leave the version empty to only build.
+# The website's download buttons always point at the latest release.
 name: Desktop app
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, like 1.0.1 (empty = build only)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -51,11 +57,15 @@ jobs:
           npm ci
           npm run build
 
-      - name: Version from tag
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Set the app version
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.version != ''
         working-directory: desktop
         shell: bash
-        run: npm version --no-git-tag-version "${GITHUB_REF_NAME#v}"
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          V="${INPUT_VERSION:-${GITHUB_REF_NAME#v}}"
+          npm version --no-git-tag-version --allow-same-version "${V#v}"
 
       - name: Ad-hoc sign the bundled programs (Apple silicon refuses unsigned code)
         if: runner.os == 'macOS'
@@ -90,7 +100,7 @@ jobs:
 
   release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.version != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -100,9 +110,12 @@ jobs:
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           ls -la installers
-          gh release create "$GITHUB_REF_NAME" installers/* \
+          if [ -n "$INPUT_VERSION" ]; then TAG="v${INPUT_VERSION#v}"; else TAG="$GITHUB_REF_NAME"; fi
+          gh release create "$TAG" installers/* \
             --repo "$GITHUB_REPOSITORY" \
-            --title "AI Video Editor $GITHUB_REF_NAME" \
+            --target "$GITHUB_SHA" \
+            --title "AI Video Editor $TAG" \
             --notes "Download the installer for your computer below, or from the website. The apps are not code-signed yet: on Windows choose More info, then Run anyway; on a Mac open the app once, then go to System Settings > Privacy & Security and click Open Anyway."

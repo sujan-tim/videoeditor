@@ -100,7 +100,7 @@ Releases are built by GitHub Actions (`.github/workflows/desktop.yml`) on Window
 and Intel) and Linux. To publish a new version:
 
 ```bash
-git tag v1.0.1 && git push origin v1.0.1
+git tag v1.0.1 && git push origin v1.0.1    # or: Actions > Desktop app > Run workflow, version 1.0.1
 ```
 
 The website's download buttons point at `releases/latest`, so they pick up each new release. The
