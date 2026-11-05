@@ -2,7 +2,7 @@
 
 // Public landing page: edit in the browser, or download the desktop app that does everything locally.
 import { useEffect, useState } from "react";
-import { detectOS, DOWNLOADS, RELEASES_URL, type Download } from "@/lib/site";
+import { detectOS, DOWNLOADS, RELEASES_URL, REPO, type Download } from "@/lib/site";
 
 const FEATURES = [
   { title: "Instant preview", body: "Cuts, speed, color, transitions, text and captions play the moment you make them. No waiting for renders." },
@@ -15,7 +15,16 @@ const FEATURES = [
 
 export default function Landing() {
   const [os, setOs] = useState<Download["os"] | null>(null);
-  useEffect(() => setOs(detectOS()), []);
+  // Which installers the latest GitHub release actually has (null = still checking or unknown).
+  const [available, setAvailable] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    setOs(detectOS());
+    fetch(`https://api.github.com/repos/${REPO}/releases/latest`)
+      .then((r) => (r.ok ? r.json() : r.status === 404 ? { assets: [] } : null))
+      .then((rel) => rel && setAvailable(new Set((rel.assets ?? []).map((a: { name: string }) => a.name))))
+      .catch(() => {});
+  }, []);
+  const ready = (d: Download) => available === null || available.has(d.file);
   const primary = DOWNLOADS.find((d) => d.os === os);
 
   return (
@@ -48,8 +57,8 @@ export default function Landing() {
           <a href="/edit/" className="w-full rounded-lg bg-violet-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-violet-900/40 hover:bg-violet-500 sm:w-auto" data-testid="cta-online">
             Edit online now
           </a>
-          <a href={primary ? primary.url : "#download"} className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-6 py-3 text-sm font-semibold hover:border-zinc-500 sm:w-auto" data-testid="cta-download">
-            {primary ? `Download for ${primary.label}` : "Download the app"}
+          <a href={primary && ready(primary) ? primary.url : "#download"} className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-6 py-3 text-sm font-semibold hover:border-zinc-500 sm:w-auto" data-testid="cta-download">
+            {primary ? (ready(primary) ? `Download for ${primary.label}` : `${primary.label} app coming soon`) : "Download the app"}
           </a>
         </div>
         <p className="mt-3 text-xs text-zinc-500">Free. The desktop app edits on your own computer, so your footage never leaves it.</p>
@@ -82,9 +91,13 @@ export default function Landing() {
                     </div>
                     <div className="text-xs text-zinc-500">{d.detail}</div>
                   </div>
-                  <a href={d.url} className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs font-medium hover:border-violet-400 hover:text-violet-200" data-testid={`dl-${d.os}`}>
-                    Download
-                  </a>
+                  {ready(d) ? (
+                    <a href={d.url} className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs font-medium hover:border-violet-400 hover:text-violet-200" data-testid={`dl-${d.os}`}>
+                      Download
+                    </a>
+                  ) : (
+                    <span className="rounded-md border border-zinc-800 px-3 py-1.5 text-xs text-zinc-500">Coming soon</span>
+                  )}
                 </li>
               ))}
             </ul>
