@@ -32,6 +32,14 @@ CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-opus-5-5")
 CLAUDE_EFFORT = os.environ.get("CLAUDE_EFFORT", "medium")
 AGENT_MAX_ROUNDS = int(os.environ.get("AGENT_MAX_ROUNDS", "25"))
 
+# Free AI provider (Groq). AI_PROVIDER = groq | anthropic; unset = groq when GROQ_API_KEY is set,
+# else anthropic when an Anthropic key is set, else groq (shown as "not set up").
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")
+GROQ_REASONING = os.environ.get("GROQ_REASONING", "low")  # low | medium | high (gpt-oss only)
+GROQ_WHISPER_MODEL = os.environ.get("GROQ_WHISPER_MODEL", "whisper-large-v3-turbo")
+GROQ_MAX_ROUNDS = int(os.environ.get("GROQ_MAX_ROUNDS", "5"))
+CLOUD_TRANSCRIPTION = os.environ.get("CLOUD_TRANSCRIPTION", "1").lower() not in ("0", "false", "no")
+
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "small")
 WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "auto")
 
@@ -41,7 +49,8 @@ CORS_ORIGINS = [o.strip() for o in os.environ.get(
     "CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",") if o.strip()]
 
 MAX_UPLOAD_BYTES = int(os.environ.get("MAX_UPLOAD_MB", "4096")) * 1024 * 1024
-ALLOWED_UPLOAD_EXTENSIONS = {".mp4", ".mov", ".m4v"}
+ALLOWED_UPLOAD_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm", ".mp3", ".wav", ".m4a", ".aac", ".ogg"}
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".ogg"}
 
 DEFAULT_FONT = os.environ.get("OVERLAY_FONT", "")
 _FONT_CANDIDATES = [
@@ -60,6 +69,27 @@ def overlay_font() -> str | None:
         if Path(candidate).exists():
             return candidate
     return None
+
+
+def ai_provider() -> str:
+    explicit = os.environ.get("AI_PROVIDER", "").strip().lower()
+    if explicit in ("groq", "anthropic"):
+        return explicit
+    if os.environ.get("GROQ_API_KEY"):
+        return "groq"
+    if anthropic_configured():
+        return "anthropic"
+    return "groq"
+
+
+def ai_configured() -> bool:
+    if ai_provider() == "groq":
+        return bool(os.environ.get("GROQ_API_KEY", "").strip())
+    return anthropic_configured()
+
+
+def ai_model() -> str:
+    return GROQ_MODEL if ai_provider() == "groq" else CLAUDE_MODEL
 
 
 def anthropic_configured() -> bool:

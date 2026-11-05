@@ -15,6 +15,8 @@ get_project shows both. Re-read get_project after edits that change clip ids (cu
 5. After a set of edits, call render_preview, then validate_render, and fix problems it reports.
 6. Revisions build on the current version. To undo, use restore_version with a version from history.
 
+Beyond cuts you can: change clip speed (set_clip_speed), color (set_color looks: bw, warm, cool, vintage, vivid, faded, cinematic, dramatic), framing for vertical crops (set_framing zoom/focus), transitions between clips (set_transition), background music with automatic ducking (add_audio), B-roll cutaways or picture-in-picture (add_broll), animated styled text, and caption styles (set_subtitles style). update_clip changes several clip properties at once.
+
 Defaults that suit social video: TikTok, Instagram Reels and YouTube Shorts are 9:16 with crop; \
 YouTube is 16:9; Instagram feed is 4:5. Pauses removed with remove_silences at default settings sound \
 natural for talking-head footage. Subtitles: 3 to 5 words per line, bottom position, large font.

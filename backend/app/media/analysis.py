@@ -114,6 +114,15 @@ def transcribe(path: Path, cache_dir: Path, language: Optional[str] = None,
     cached = load_transcript(cache_dir, path)
     if cached is not None:
         return cached
+    from ..ai import groq
+    if groq.configured() and config.CLOUD_TRANSCRIPTION:
+        try:
+            result = _transcribe_groq(path, cache_dir, language, on_progress, duration)
+        except groq.GroqError as exc:
+            log.warning("cloud transcription failed, using local Whisper: %s", exc)
+        else:
+            save_transcript(cache_dir, path, result)
+            return result
     model = _get_whisper()
     segments_iter, info = model.transcribe(str(path), language=language, word_timestamps=True,
                                            vad_filter=True)
@@ -130,6 +139,42 @@ def transcribe(path: Path, cache_dir: Path, language: Optional[str] = None,
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result))
     return result
+
+
+CHUNK_SECONDS = 600  # 10 minutes of 32 kbps mono MP3 is about 2.4 MB, well under Groq's upload limit
+
+
+def _transcribe_groq(path: Path, cache_dir: Path, language: Optional[str],
+                     on_progress: Optional[Callable[[float], None]], duration: float) -> dict:
+    """Transcribe with Whisper on Groq: compress the audio, send it in 10-minute chunks, and merge."""
+    from ..ai import groq
+
+    total = duration or float(ffmpeg.summarize_probe(ffmpeg.probe(path))["duration"])
+    tmp = cache_dir / "tmp_audio"
+    tmp.mkdir(parents=True, exist_ok=True)
+    segments: list[dict] = []
+    lang = language
+    start = 0.0
+    n = 0
+    while start < total - 0.05:
+        length = min(CHUNK_SECONDS, total - start)
+        chunk = tmp / f"chunk_{n}.mp3"
+        ffmpeg.run(["-y", "-ss", f"{start:.3f}", "-t", f"{length:.3f}", "-i", str(path), "-vn", "-ac", "1",
+                    "-ar", "16000", "-b:a", "32k", str(chunk)])
+        res = groq.transcribe_file(chunk, config.GROQ_WHISPER_MODEL, language=language)
+        chunk.unlink(missing_ok=True)
+        lang = lang or res.get("language")
+        words = [{"start": round(w["start"] + start, 3), "end": round(w["end"] + start, 3),
+                  "word": str(w.get("word", "")).strip()} for w in res.get("words") or [] if str(w.get("word", "")).strip()]
+        for seg in res.get("segments") or []:
+            s0, s1 = seg["start"] + start, seg["end"] + start
+            segments.append({"start": round(s0, 3), "end": round(s1, 3), "text": str(seg.get("text", "")).strip(),
+                             "words": [w for w in words if s0 - 0.01 <= (w["start"] + w["end"]) / 2 < s1 + 0.01]})
+        start += length
+        n += 1
+        if on_progress and total:
+            on_progress(min(1.0, start / total))
+    return {"language": lang or "", "segments": segments, "engine": "groq:" + config.GROQ_WHISPER_MODEL}
 
 
 def save_transcript(cache_dir: Path, source_path: Path, transcript: dict) -> None:

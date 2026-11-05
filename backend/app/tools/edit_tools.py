@@ -6,7 +6,8 @@ from typing import Literal, Optional
 from pydantic import Field, field_validator, model_validator
 
 from ..media import analysis
-from ..models import Clip, EditPlan, Position, TextOverlay
+from ..models import (CaptionStyle, Clip, EditPlan, Position, TextAnimation, TextOverlay, TextStyle,
+                      new_id)
 from ..render.compiler import COLOR_RE, place_clips
 from .registry import ToolContext, ToolError, ToolInput, ToolResult, registry
 
@@ -42,27 +43,48 @@ def _shift_overlays(plan: EditPlan, start: float, end: float) -> None:
     plan.overlays = kept
 
 
+def _shift_tracks(plan: EditPlan, start: float, removed: float) -> None:
+    """Move b-roll, voice-over and sound effects that sit after a cut so they stay on their moment.
+    Music beds are left alone (they are trimmed to the new length at render time)."""
+    for item in list(plan.broll) + [a for a in plan.audio if a.role != "music"]:
+        if item.timeline_start >= start + removed:
+            item.timeline_start = round(item.timeline_start - removed, 3)
+        elif item.timeline_start > start:
+            item.timeline_start = round(start, 3)
+
+
+def piece(clip: Clip, start: float, end: float, first: bool, last: bool) -> Clip:
+    """A copy of clip covering [start, end) of its source, keeping its look, speed and framing."""
+    return clip.model_copy(update={
+        "id": new_id("clip"), "start": round(start, 3), "end": round(end, 3),
+        "transition_in": clip.transition_in if first else None,
+        "fade_in": clip.fade_in if first else 0.0,
+        "fade_out": clip.fade_out if last else 0.0,
+    }, deep=True)
+
+
 def cut_timeline_range(plan: EditPlan, start: float, end: float) -> float:
     """Remove [start, end) of the output timeline. Returns seconds removed."""
     if end <= start:
         return 0.0
     new_clips: list[Clip] = []
-    removed = 0.0
+    before = plan.duration()
     for pc, clip in zip(place_clips(plan), plan.clips):
         if pc.timeline_end <= start or pc.timeline_start >= end:
             new_clips.append(clip)
             continue
-        cut_from = max(start, pc.timeline_start) - pc.timeline_start + clip.start
-        cut_to = min(end, pc.timeline_end) - pc.timeline_start + clip.start
-        removed += cut_to - cut_from
-        if cut_from - clip.start >= MIN_CLIP:
-            new_clips.append(Clip(source_id=clip.source_id, start=clip.start,
-                                  end=round(cut_from, 3), volume=clip.volume))
-        if clip.end - cut_to >= MIN_CLIP:
-            new_clips.append(Clip(source_id=clip.source_id, start=round(cut_to, 3),
-                                  end=clip.end, volume=clip.volume))
+        cut_from = (max(start, pc.timeline_start) - pc.timeline_start) * clip.speed + clip.start
+        cut_to = (min(end, pc.timeline_end) - pc.timeline_start) * clip.speed + clip.start
+        left = cut_from - clip.start >= MIN_CLIP
+        right = clip.end - cut_to >= MIN_CLIP
+        if left:
+            new_clips.append(piece(clip, clip.start, cut_from, True, not right))
+        if right:
+            new_clips.append(piece(clip, cut_to, clip.end, not left, True))
     plan.clips = new_clips
+    removed = max(0.0, before - plan.duration())
     _shift_overlays(plan, start, min(end, start + removed))
+    _shift_tracks(plan, start, removed)
     return removed
 
 
@@ -122,9 +144,10 @@ def split_clip(ctx: ToolContext, a: SplitArgs) -> ToolResult:
     for pc in place_clips(plan):
         if pc.timeline_start + MIN_CLIP < a.timeline_time < pc.timeline_end - MIN_CLIP:
             clip = plan.clips[pc.index]
-            at = round(clip.start + a.timeline_time - pc.timeline_start, 3)
-            second = Clip(source_id=clip.source_id, start=at, end=clip.end, volume=clip.volume)
+            at = round(clip.start + (a.timeline_time - pc.timeline_start) * clip.speed, 3)
+            second = piece(clip, at, clip.end, False, True)
             clip.end = at
+            clip.fade_out = 0.0
             plan.clips.insert(pc.index + 1, second)
             return ToolResult({"left_clip_id": clip.id, "right_clip_id": second.id},
                               label=f"Split at {_fmt(a.timeline_time)}")
@@ -210,8 +233,8 @@ def remove_silences(ctx: ToolContext, a: RemoveSilencesArgs) -> ToolResult:
             s2 = s if s <= pc.source_start + 1e-3 else s + a.padding
             e2 = e if e >= pc.source_end - 1e-3 else e - a.padding
             if e2 - s2 >= 0.1:
-                ranges.append((pc.timeline_start + s2 - pc.source_start,
-                               pc.timeline_start + e2 - pc.source_start))
+                ranges.append((pc.timeline_start + (s2 - pc.source_start) / pc.speed,
+                               pc.timeline_start + (e2 - pc.source_start) / pc.speed))
     if not ranges:
         return ToolResult({"removed_count": 0, "removed_seconds": 0,
                            "message": "No pauses found with these settings."})
@@ -275,8 +298,9 @@ class OutputFormatArgs(ToolInput):
                                "instagram_feed", "square", "original"]] = Field(
         None, description="Preset that sets aspect and fit for a platform.")
     aspect: Optional[Literal["original", "9:16", "16:9", "1:1", "4:5"]] = None
-    fit: Optional[Literal["pad", "crop"]] = Field(
-        None, description="crop = fill the frame (center crop); pad = letterbox with black bars.")
+    fit: Optional[Literal["pad", "crop", "blur"]] = Field(
+        None, description="crop = fill the frame; pad = letterbox with black bars; blur = whole picture "
+                          "over a blurred copy of itself (good for landscape footage in 9:16).")
     resolution: Optional[Literal["2160p", "1080p", "720p", "480p"]] = Field(
         None, description="Short-side resolution of the export.")
 
@@ -316,7 +340,12 @@ class AddTextArgs(_ColorMixin):
     position: Position = "top"
     font_size: int = Field(64, ge=12, le=200, description="Pixels at a 1080-pixel short side.")
     color: str = "white"
-    background: bool = Field(True, description="Draw a dark box behind the text for legibility.")
+    background: bool = Field(True, description="Legacy; use style.")
+    style: TextStyle = Field("box", description="box = dark box behind; outline; shadow; plain; "
+                                                "highlight = colored box with dark text.")
+    animation: TextAnimation = Field("fade", description="How the text appears.")
+    x: Optional[float] = Field(None, ge=0, le=1, description="Horizontal centre 0..1; overrides position.")
+    y: Optional[float] = Field(None, ge=0, le=1, description="Vertical centre 0..1; overrides position.")
 
     @model_validator(mode="after")
     def _order(self):
@@ -342,6 +371,10 @@ class UpdateTextArgs(_ColorMixin):
     font_size: Optional[int] = Field(None, ge=12, le=200)
     color: Optional[str] = None
     background: Optional[bool] = None
+    style: Optional[TextStyle] = None
+    animation: Optional[TextAnimation] = None
+    x: Optional[float] = Field(None, ge=0, le=1)
+    y: Optional[float] = Field(None, ge=0, le=1)
 
 
 @registry.register("update_text_overlay", "Change any property of an existing text overlay.",
@@ -350,7 +383,10 @@ def update_text_overlay(ctx: ToolContext, a: UpdateTextArgs) -> ToolResult:
     ov = next((o for o in ctx.project.plan.overlays if o.id == a.overlay_id), None)
     if ov is None:
         raise ToolError(f"No text overlay with id '{a.overlay_id}'.")
-    for k, v in a.model_dump(exclude_none=True, exclude={"overlay_id"}).items():
+    changes = a.model_dump(exclude_none=True, exclude={"overlay_id"})
+    if "position" in changes and "x" not in changes and "y" not in changes:
+        ov.x = ov.y = None  # a named position replaces a dragged one
+    for k, v in changes.items():
         setattr(ov, k, v)
     if ov.end <= ov.start:
         raise ToolError("end must be greater than start")
@@ -374,6 +410,8 @@ def remove_text_overlay(ctx: ToolContext, a: OverlayIdArgs) -> ToolResult:
 # ---- subtitles -----------------------------------------------------------------
 class SubtitleArgs(ToolInput):
     enabled: bool = True
+    style: Optional[CaptionStyle] = Field(None, description="bold_highlight (spoken word colored), karaoke "
+                                          "(colored and enlarged), boxed, clean, minimal.")
     font_size: Optional[int] = Field(None, ge=16, le=200)
     position: Optional[Position] = None
     max_words_per_line: Optional[int] = Field(None, ge=1, le=12)

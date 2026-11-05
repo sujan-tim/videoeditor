@@ -121,6 +121,23 @@ class ToolRegistry:
         return [{"name": t.name, "description": t.description, "input_schema": t.input_schema()}
                 for t in self._tools.values()]
 
+    def compact_catalog(self, exclude: tuple[str, ...] = ()) -> str:
+        """One line per tool: name(arg:type=default, ...) - first sentence of the description.
+        Small enough for models with tight token budgets (Groq free tier)."""
+        lines = []
+        for t in self._tools.values():
+            if t.name in exclude:
+                continue
+            schema = t.input_schema()
+            props = schema.get("properties", {})
+            required = set(schema.get("required", []))
+            args = []
+            for name, spec in props.items():
+                args.append(name + ("" if name in required else "?") + ":" + _short_type(spec, schema))
+            desc = t.description.split(". ")[0].rstrip(".")
+            lines.append(f"{t.name}({', '.join(args)}) - {desc}")
+        return "\n".join(lines)
+
     def describe(self) -> list[dict]:
         return [{"name": t.name, "description": t.description, "category": t.category,
                  "mutates": t.mutates, "long_running": t.long_running,
@@ -164,6 +181,26 @@ class ToolRegistry:
         if version is not None:
             data["new_version"] = version
         return ToolOutcome(True, name, data=data, version=version, images=result.images)
+
+
+def _short_type(spec: dict, root: dict) -> str:
+    if "$ref" in spec:
+        ref = spec["$ref"].split("/")[-1]
+        spec = root.get("$defs", {}).get(ref, {})
+    if "anyOf" in spec:
+        parts = [_short_type(s, root) for s in spec["anyOf"] if s.get("type") != "null"]
+        return "|".join(parts) if parts else "null"
+    if "enum" in spec:
+        return "|".join(str(v) for v in spec["enum"])
+    if "const" in spec:
+        return str(spec["const"])
+    typ = spec.get("type", "any")
+    rng = ""
+    if "minimum" in spec or "maximum" in spec or "exclusiveMinimum" in spec:
+        lo = spec.get("minimum", spec.get("exclusiveMinimum", ""))
+        hi = spec.get("maximum", "")
+        rng = f"[{lo}..{hi}]"
+    return {"number": "num", "integer": "int", "boolean": "bool", "string": "str"}.get(typ, typ) + rng
 
 
 registry = ToolRegistry()

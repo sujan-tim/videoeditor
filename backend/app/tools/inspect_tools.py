@@ -20,25 +20,40 @@ def project_summary(ctx_project, project_dir) -> dict:
     sources = []
     for s in p.sources.values():
         sources.append({
-            "id": s.id, "filename": s.filename, "duration": s.duration,
+            "id": s.id, "filename": s.filename, "kind": s.kind, "duration": s.duration,
             "size": f"{s.width}x{s.height}", "fps": s.fps, "has_audio": s.has_audio,
             "has_transcript": analysis.load_transcript(cache, project_dir / s.path) is not None,
         })
-    clips = [{
-        "index": pc.index, "clip_id": pc.clip_id, "source_id": pc.source_id,
-        "source_range": [pc.source_start, pc.source_end],
-        "timeline_range": [pc.timeline_start, pc.timeline_end], "volume": pc.volume,
-    } for pc in place_clips(plan)]
+    clips = []
+    for pc, c in zip(place_clips(plan), plan.clips):
+        item = {"index": pc.index, "clip_id": pc.clip_id, "source_id": pc.source_id,
+                "source_range": [pc.source_start, pc.source_end],
+                "timeline_range": [pc.timeline_start, pc.timeline_end], "volume": pc.volume}
+        # only mention non-default settings to keep the summary short
+        for k, default in (("speed", 1.0), ("look", "none"), ("zoom", 1.0), ("focus_x", 0.5),
+                           ("focus_y", 0.5), ("fade_in", 0.0), ("fade_out", 0.0)):
+            if getattr(c, k) != default:
+                item[k] = getattr(c, k)
+        if c.adjust.brightness or c.adjust.contrast or c.adjust.saturation:
+            item["adjust"] = c.adjust.model_dump()
+        if c.transition_in:
+            item["transition_in"] = c.transition_in.model_dump()
+        clips.append(item)
     latest = p.renders[-1] if p.renders else None
     return {
         "project": p.name, "version": p.version, "timeline_duration": round(plan.duration(), 3),
         "sources": sources, "clips": clips,
+        "broll": [{**b.model_dump(), "timeline_end": round(b.timeline_start + b.duration, 3)}
+                  for b in plan.broll],
+        "audio_track": [{**x.model_dump(), "timeline_end": round(x.timeline_start + x.duration, 3)}
+                        for x in plan.audio],
         "text_overlays": [o.model_dump() for o in plan.overlays],
         "subtitles": plan.subtitles.model_dump(),
         "output": {**plan.output.model_dump(), "export_size": f"{w}x{h}"},
         "latest_render": latest.model_dump() if latest else None,
         "recent_history": [{"version": v.version, "label": v.label, "actor": v.actor}
                            for v in p.history[-8:]],
+        "can_undo": p.undo_index > 0, "can_redo": 0 <= p.undo_index < len(p.undo_stack) - 1,
     }
 
 

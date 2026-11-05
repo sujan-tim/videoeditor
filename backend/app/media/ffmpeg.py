@@ -81,10 +81,21 @@ def probe(path: Path) -> dict:
 
 def summarize_probe(data: dict) -> dict:
     """Reduce ffprobe JSON to the fields the editor cares about."""
-    video = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"), None)
+    video = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"
+                  and not (s.get("disposition") or {}).get("attached_pic")), None)
     audio = next((s for s in data.get("streams", []) if s.get("codec_type") == "audio"), None)
-    if video is None:
-        raise MediaError("file has no video stream")
+    if video is None and audio is None:
+        raise MediaError("file has no video or audio stream")
+    if video is None:  # audio-only file (music, voice-over)
+        fmt = data.get("format", {})
+        return {
+            "kind": "audio", "duration": round(float(fmt.get("duration") or audio.get("duration") or 0), 3),
+            "width": 0, "height": 0, "fps": 0.0, "has_audio": True, "video_codec": None,
+            "audio_codec": audio.get("codec_name"),
+            "audio_sample_rate": int(audio.get("sample_rate", 0) or 0),
+            "bit_rate": int(fmt.get("bit_rate", 0) or 0), "size_bytes": int(fmt.get("size", 0) or 0),
+            "rotation": 0, "container": fmt.get("format_name"),
+        }
     fmt = data.get("format", {})
     duration = float(fmt.get("duration") or video.get("duration") or 0)
     fps = 30.0
@@ -105,6 +116,7 @@ def summarize_probe(data: dict) -> dict:
     if abs(rotation) % 180 == 90:  # ffmpeg auto-rotates on decode
         width, height = height, width
     return {
+        "kind": "video",
         "duration": round(duration, 3),
         "width": width,
         "height": height,

@@ -15,12 +15,12 @@ type Props = {
   project: Project;
   chat: ChatMessage[];
   agentJob: Job | undefined;
-  claudeReady: boolean;
+  aiReady: boolean;
   onSent: () => void;
   onError: (e: string) => void;
 };
 
-export function ChatPanel({ project, chat, agentJob, claudeReady, onSent, onError }: Props) {
+export function ChatPanel({ project, chat, agentJob, aiReady, onSent, onError }: Props) {
   const [text, setText] = useState("");
   const [approval, setApproval] = useState(false);
   const end = useRef<HTMLDivElement>(null);
@@ -44,9 +44,9 @@ export function ChatPanel({ project, chat, agentJob, claudeReady, onSent, onErro
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
-        {!claudeReady && (
-          <div className="rounded-md border border-amber-800 bg-amber-950/40 p-2 text-xs text-amber-200">
-            Claude is not configured. Add <code>ANTHROPIC_API_KEY</code> to <code>backend/.env</code> and restart the backend. Manual editing still works.
+        {!aiReady && (
+          <div className="rounded-md border border-amber-800 bg-amber-950/40 p-2 text-xs leading-5 text-amber-200">
+            The AI editor needs a free Groq key. Create one at <a className="underline" href="https://console.groq.com/keys" target="_blank" rel="noreferrer">console.groq.com/keys</a>, then set <code>GROQ_API_KEY</code> in your Render environment (or <code>backend/.env</code>) and restart. Manual editing works without it.
           </div>
         )}
         {!chat.length && (

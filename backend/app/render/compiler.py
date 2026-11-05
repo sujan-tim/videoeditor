@@ -61,6 +61,8 @@ class PlacedClip:
     timeline_start: float
     timeline_end: float
     volume: float
+    speed: float = 1.0
+    overlap_in: float = 0.0  # seconds this clip overlaps the previous one (transition)
 
 
 def place_clips(plan: EditPlan) -> list[PlacedClip]:
@@ -68,19 +70,27 @@ def place_clips(plan: EditPlan) -> list[PlacedClip]:
     placed = []
     for i, c in enumerate(plan.clips):
         d = c.duration
-        placed.append(PlacedClip(i, c.id, c.source_id, c.start, c.end, round(t, 3),
-                                 round(t + d, 3), c.volume))
-        t += d
+        ov = plan.transition_overlap(i)
+        start = t - ov
+        placed.append(PlacedClip(i, c.id, c.source_id, c.start, c.end, round(start, 3),
+                                 round(start + d, 3), c.volume, c.speed, round(ov, 3)))
+        t = start + d
     return placed
+
+
+def _first_video_source(project: Project, plan: EditPlan):
+    for c in plan.clips:
+        src = project.sources.get(c.source_id)
+        if src and src.width:
+            return src
+    return None
 
 
 def output_dimensions(project: Project, plan: EditPlan, preview: bool = False) -> tuple[int, int]:
     out = plan.output
     short = PREVIEW_SHORT_SIDE if preview else SHORT_SIDE[out.resolution]
     if out.aspect == "original":
-        src = None
-        if plan.clips:
-            src = project.sources.get(plan.clips[0].source_id)
+        src = _first_video_source(project, plan)
         sw, sh = (src.width, src.height) if src else (1920, 1080)
         src_short = min(sw, sh)
         short = min(short, src_short)
@@ -94,10 +104,9 @@ def output_dimensions(project: Project, plan: EditPlan, preview: bool = False) -
 
 
 def output_fps(project: Project, plan: EditPlan) -> float:
-    if plan.clips:
-        src = project.sources.get(plan.clips[0].source_id)
-        if src and src.fps:
-            return round(min(60.0, max(1.0, src.fps)), 3)
+    src = _first_video_source(project, plan)
+    if src and src.fps:
+        return round(min(60.0, max(1.0, src.fps)), 3)
     return 30.0
 
 
@@ -129,8 +138,8 @@ def timeline_words(project: Project, plan: EditPlan, project_dir: Path) -> tuple
             for w in seg.get("words", []):
                 mid = (w["start"] + w["end"]) / 2
                 if pc.source_start <= mid < pc.source_end:
-                    ws = max(w["start"], pc.source_start) - pc.source_start + pc.timeline_start
-                    we = min(w["end"], pc.source_end) - pc.source_start + pc.timeline_start
+                    ws = (max(w["start"], pc.source_start) - pc.source_start) / pc.speed + pc.timeline_start
+                    we = (min(w["end"], pc.source_end) - pc.source_start) / pc.speed + pc.timeline_start
                     words.append({"start": round(ws, 3), "end": round(max(we, ws + 0.05), 3),
                                   "word": w["word"]})
     words.sort(key=lambda w: w["start"])
@@ -171,13 +180,30 @@ def _ass_escape(text: str) -> str:
     return text.replace("\\", "/").replace("{", "(").replace("}", ")").replace("\n", " ")
 
 
+CAPTION_STYLES = {
+    # name: (border_style, outline_ratio, shadow_ratio, back_colour, highlight, pop, size_factor)
+    "bold_highlight": (1, 0.08, 0.0, "&H80000000", True, False, 1.0),
+    "karaoke": (1, 0.09, 0.0, "&H80000000", True, True, 1.0),
+    "boxed": (3, 0.18, 0.0, "&H60000000", True, False, 0.9),
+    "clean": (1, 0.05, 0.03, "&H80000000", False, False, 0.85),
+    "minimal": (1, 0.0, 0.05, "&HA0000000", False, False, 0.7),
+}
+
+
 def build_ass(plan: EditPlan, words: list[dict], width: int, height: int) -> str:
     st = plan.subtitles
+    border, outline_r, shadow_r, back, highlight, pop, factor = CAPTION_STYLES.get(
+        st.style, CAPTION_STYLES["bold_highlight"])
     scale = min(width, height) / 1080
-    size = max(12, int(st.font_size * scale))
+    size = max(12, int(st.font_size * scale * factor))
     align = {"bottom": 2, "center": 5, "top": 8}[st.position]
     margin_v = int(height * (0.14 if st.position == "bottom" else 0.10))
     hl = color_hex(st.highlight_color) if st.highlight_color else "FFFFFF"
+    bold = 0 if st.style in ("clean", "minimal") else -1
+    outline = max(0, int(size * outline_r)) if outline_r else 0
+    if border == 1 and outline_r:
+        outline = max(2, outline)
+    shadow = max(0, int(size * shadow_r))
     header = (
         "[Script Info]\nScriptType: v4.00+\n"
         f"PlayResX: {width}\nPlayResY: {height}\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n"
@@ -185,8 +211,9 @@ def build_ass(plan: EditPlan, words: list[dict], width: int, height: int) -> str
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
         "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, "
         "Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
-        f"Style: Default,DejaVu Sans,{size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,"
-        f"{max(2, int(size * 0.08))},0,{align},{int(width * 0.06)},{int(width * 0.06)},{margin_v},1\n\n"
+        f"Style: Default,DejaVu Sans,{size},&H00FFFFFF,&H00FFFFFF,"
+        f"{'&H60000000' if border == 3 else '&H00000000'},{back},{bold},0,0,0,100,100,0,0,{border},"
+        f"{outline},{shadow},{align},{int(width * 0.06)},{int(width * 0.06)},{margin_v},1\n\n"
         "[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
     lines = []
@@ -196,6 +223,11 @@ def build_ass(plan: EditPlan, words: list[dict], width: int, height: int) -> str
         if ci + 1 < len(cues):
             cue_end = min(max(cue_end, cue[-1]["end"] + 0.25), cues[ci + 1][0]["start"])
         texts = [_ass_escape(w["word"].upper() if st.uppercase else w["word"]) for w in cue]
+        if not highlight:
+            if cue_end > cue[0]["start"]:
+                lines.append(f"Dialogue: 0,{_ass_time(cue[0]['start'])},{_ass_time(cue_end)},Default,,0,0,0,,"
+                             + " ".join(texts))
+            continue
         for wi, w in enumerate(cue):
             start = cue[0]["start"] if wi == 0 else w["start"]
             end = cue[wi + 1]["start"] if wi + 1 < len(cue) else cue_end
@@ -203,7 +235,12 @@ def build_ass(plan: EditPlan, words: list[dict], width: int, height: int) -> str
                 continue
             parts = []
             for k, t in enumerate(texts):
-                parts.append("{\\c" + _ass_color(hl) + "&}" + t + "{\\c&H00FFFFFF&}" if k == wi else t)
+                if k == wi:
+                    grow = "\\fscx112\\fscy112" if pop else ""
+                    parts.append("{\\c" + _ass_color(hl) + "&" + grow + "}" + t
+                                 + "{\\c&H00FFFFFF&\\fscx100\\fscy100}")
+                else:
+                    parts.append(t)
             lines.append(f"Dialogue: 0,{_ass_time(start)},{_ass_time(end)},Default,,0,0,0,,{' '.join(parts)}")
     return header + "\n".join(lines) + "\n"
 
@@ -223,6 +260,141 @@ def wrap_text(text: str, max_chars: int) -> str:
     return "\n".join(out_lines)
 
 
+# ---- looks ---------------------------------------------------------------------
+LOOK_FILTERS = {
+    "none": "",
+    "bw": "hue=s=0,eq=contrast=1.08",
+    "warm": "colorbalance=rs=0.08:gs=0.02:bs=-0.08:rm=0.06:bm=-0.06,eq=saturation=1.08",
+    "cool": "colorbalance=rs=-0.08:bs=0.10:rm=-0.04:bm=0.08",
+    "vintage": "curves=preset=vintage,eq=saturation=0.85",
+    "vivid": "eq=saturation=1.4:contrast=1.08",
+    "faded": "eq=contrast=0.85:brightness=0.04:saturation=0.8",
+    "cinematic": "colorbalance=rs=-0.05:bs=0.08:rh=0.08:bh=-0.05,eq=contrast=1.1:saturation=0.9",
+    "dramatic": "eq=contrast=1.3:saturation=0.8:brightness=-0.03",
+}
+
+
+def look_chain(look: str, adjust=None) -> list[str]:
+    chain = [LOOK_FILTERS.get(look, "")] if LOOK_FILTERS.get(look) else []
+    if adjust is not None and (adjust.brightness or adjust.contrast or adjust.saturation):
+        chain.append(f"eq=brightness={adjust.brightness * 0.3:.3f}:contrast={1 + adjust.contrast * 0.5:.3f}"
+                     f":saturation={max(0.0, 1 + adjust.saturation):.3f}")
+    return chain
+
+
+def atempo_chain(speed: float) -> list[str]:
+    """atempo accepts 0.5..2 per instance; chain it for larger changes."""
+    parts = []
+    s = speed
+    while s > 2.0:
+        parts.append("atempo=2.0")
+        s /= 2.0
+    while s < 0.5:
+        parts.append("atempo=0.5")
+        s /= 0.5
+    if abs(s - 1.0) > 1e-3:
+        parts.append(f"atempo={s:.4f}")
+    return parts
+
+
+def fit_chain(width: int, height: int, fit: str, aspect: str, fx: float = 0.5, fy: float = 0.5,
+              zoom: float = 1.0, bg_label: str = "") -> tuple[list[str], Optional[str]]:
+    """Return filters that fit a stream into width x height.
+
+    For "blur" this returns (pre, None) with a split/overlay graph signalled by the caller.
+    """
+    if fit == "pad" or aspect == "original":
+        chain = [f"scale={width}:{height}:force_original_aspect_ratio=decrease:force_divisible_by=2",
+                 f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black"]
+    else:
+        chain = [f"scale={width}:{height}:force_original_aspect_ratio=increase:force_divisible_by=2",
+                 f"crop={width}:{height}:(iw-{width})*{fx:.3f}:(ih-{height})*{fy:.3f}"]
+    if zoom > 1.001:
+        zw, zh = _even(width * zoom), _even(height * zoom)
+        chain += [f"scale={zw}:{zh}", f"crop={width}:{height}:({zw}-{width})*{fx:.3f}:({zh}-{height})*{fy:.3f}"]
+    return chain, None
+
+
+def _video_fit(label_in: str, label_out: str, width: int, height: int, plan: EditPlan,
+               fx: float, fy: float, zoom: float, tag: str) -> list[str]:
+    out = plan.output
+    if out.fit == "blur" and out.aspect != "original":
+        fg, _ = fit_chain(width, height, "pad", "x", fx, fy, 1.0)
+        fg = [fg[0]]  # scale only, no pad
+        bg, _ = fit_chain(width, height, "crop", "x", 0.5, 0.5, 1.0)
+        f = [f"[{label_in}]split=2[{tag}bg][{tag}fg]",
+             f"[{tag}bg]{','.join(bg)},boxblur=20:2,eq=brightness=-0.08[{tag}bgb]",
+             f"[{tag}fg]{','.join(fg)}[{tag}fgs]",
+             f"[{tag}bgb][{tag}fgs]overlay=(W-w)/2:(H-h)/2"]
+        if zoom > 1.001:
+            zw, zh = _even(width * zoom), _even(height * zoom)
+            f[-1] += f",scale={zw}:{zh},crop={width}:{height}:({zw}-{width})*{fx:.3f}:({zh}-{height})*{fy:.3f}"
+        f[-1] += f"[{label_out}]"
+        return f
+    chain, _ = fit_chain(width, height, out.fit, out.aspect, fx, fy, zoom)
+    return [f"[{label_in}]{','.join(chain)}[{label_out}]"]
+
+
+# ---- text overlays (drawtext) -------------------------------------------------
+def _overlay_filters(plan: EditPlan, width: int, height: int, scale: float, cache: Path,
+                     font_rel: str) -> list[str]:
+    out = []
+    for k, ov in enumerate(plan.overlays):
+        size = max(10, int(ov.font_size * scale))
+        max_chars = max(8, int(width * 0.88 / (size * 0.58)))
+        s, e = ov.start, ov.end
+        dur = max(0.05, e - s)
+        a = min(0.3, dur / 3)
+        if ov.x is not None:
+            x = f"w*{ov.x:.4f}-text_w/2"
+        else:
+            x = "(w-text_w)/2"
+        if ov.y is not None:
+            y = f"h*{ov.y:.4f}-text_h/2"
+        else:
+            y = {"top": "h*0.08", "center": "(h-text_h)/2", "bottom": "h*0.78-text_h"}[ov.position]
+        alpha = "1"
+        fontsize = str(size)
+        if ov.animation in ("fade", "slide_up", "pop", "typewriter"):
+            alpha = f"min(1\\,max(0\\,min((t-{s:.3f})/{a:.3f}\\,({e:.3f}-t)/{a:.3f})))"
+        if ov.animation == "slide_up":
+            y = f"{y}+h*0.04*max(0\\,1-(t-{s:.3f})/0.35)"
+        if ov.animation == "pop":
+            fontsize = f"{size}*min(1\\,0.6+0.4*max(0\\,(t-{s:.3f}))/0.18)"
+        style = ov.style
+        fc = color_hex(ov.color)
+        if style == "box":
+            deco = f":box=1:boxcolor=black@0.55:boxborderw={max(4, int(size * 0.35))}"
+        elif style == "highlight":
+            deco = f":box=1:boxcolor=0x{fc}@0.95:boxborderw={max(4, int(size * 0.3))}"
+            fc = "000000" if fc.upper() not in ("000000",) else "FFFFFF"
+        elif style == "outline":
+            deco = f":borderw={max(2, int(size * 0.08))}:bordercolor=black"
+        elif style == "shadow":
+            deco = f":shadowx={max(1, int(size * 0.05))}:shadowy={max(1, int(size * 0.05))}:shadowcolor=black@0.75"
+        else:
+            deco = ""
+        text = wrap_text(ov.text, max_chars)
+        steps = [(text, s, e)]
+        if ov.animation == "typewriter":
+            words = text.split(" ")
+            if 1 < len(words) <= 16:
+                reveal = min(dur * 0.6, 0.12 * len(words))
+                steps = []
+                for i in range(1, len(words) + 1):
+                    t0 = s + reveal * (i - 1) / len(words)
+                    t1 = s + reveal * i / len(words) if i < len(words) else e
+                    steps.append((" ".join(words[:i]), t0, t1))
+        for j, (txt, t0, t1) in enumerate(steps):
+            tfile = cache / f"overlay_{k}_{j}.txt"
+            tfile.write_text(txt)
+            out.append(
+                f"drawtext=fontfile={font_rel}:textfile=cache/{tfile.name}:expansion=none"
+                f":fontsize='{fontsize}':fontcolor=0x{fc}:alpha='{alpha}':line_spacing={int(size * 0.25)}"
+                f":x={x}:y={y}{deco}:enable='between(t,{t0:.3f},{t1:.3f})'")
+    return out
+
+
 # ---- compile -------------------------------------------------------------------
 @dataclass
 class CompiledRender:
@@ -231,6 +403,15 @@ class CompiledRender:
     width: int
     height: int
     warnings: list[str]
+
+
+PIP_POS = {
+    "top_left": ("W*0.04", "H*0.04"),
+    "top_right": ("W-w-W*0.04", "H*0.04"),
+    "bottom_left": ("W*0.04", "H-h-H*0.04"),
+    "bottom_right": ("W-w-W*0.04", "H-h-H*0.04"),
+}
+AUDIO_FMT = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo"
 
 
 def compile_plan(project: Project, plan: EditPlan, project_dir: Path, out_rel: str,
@@ -244,34 +425,155 @@ def compile_plan(project: Project, plan: EditPlan, project_dir: Path, out_rel: s
     warnings: list[str] = []
     cache = project_dir / "cache"
     cache.mkdir(exist_ok=True)
+    total = round(plan.duration(), 3)
 
     args: list[str] = ["-y"]
     filters: list[str] = []
-    concat_inputs = []
+    n_in = 0
+
+    # -- main track ---------------------------------------------------------------
+    vlabels, alabels, durs = [], [], []
     for i, c in enumerate(plan.clips):
         src = project.sources.get(c.source_id)
         if src is None:
             raise ffmpeg.MediaError(f"clip {c.id} references missing source {c.source_id}")
+        if src.kind != "video":
+            raise ffmpeg.MediaError(f"clip {c.id} uses {src.filename}, which has no picture")
         d = round(c.duration, 3)
-        args += ["-ss", f"{c.start:.3f}", "-t", f"{d:.3f}", "-i", src.path]
-        if plan.output.fit == "pad" or plan.output.aspect == "original":
-            fit = (f"scale={width}:{height}:force_original_aspect_ratio=decrease:force_divisible_by=2,"
-                   f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black")
-        else:
-            fit = (f"scale={width}:{height}:force_original_aspect_ratio=increase:force_divisible_by=2,"
-                   f"crop={width}:{height}")
-        filters.append(f"[{i}:v]setpts=PTS-STARTPTS,{fit},setsar=1,fps={fps},format=yuv420p,"
-                       f"trim=duration={d}[v{i}]")
+        args += ["-ss", f"{c.start:.3f}", "-t", f"{c.source_duration:.3f}", "-i", src.path]
+        idx = n_in
+        n_in += 1
+        sp = max(0.01, c.speed)
+        filters.append(f"[{idx}:v]setpts=(PTS-STARTPTS)/{sp:.4f}[vr{i}]")
+        filters += _video_fit(f"vr{i}", f"vf{i}", width, height, plan, c.focus_x, c.focus_y, c.zoom, f"m{i}")
+        post = look_chain(c.look, c.adjust)
+        post += [f"setsar=1,fps={fps},format=yuv420p,trim=duration={d}", "setpts=PTS-STARTPTS"]
+        if c.fade_in > 0:
+            post.append(f"fade=t=in:st=0:d={min(c.fade_in, d):.3f}")
+        if c.fade_out > 0:
+            post.append(f"fade=t=out:st={max(0, d - c.fade_out):.3f}:d={min(c.fade_out, d):.3f}")
+        filters.append(f"[vf{i}]{','.join(post)}[v{i}]")
         if src.has_audio:
-            filters.append(f"[{i}:a]asetpts=PTS-STARTPTS,aresample=48000,"
-                           f"aformat=sample_fmts=fltp:channel_layouts=stereo,volume={c.volume:.3f},"
-                           f"apad=whole_dur={d},atrim=0:{d}[a{i}]")
+            ach = [f"asetpts=PTS-STARTPTS", AUDIO_FMT] + atempo_chain(sp) + [f"volume={c.volume:.3f}"]
+        else:
+            ach = None
+        if ach:
+            if c.fade_in > 0:
+                ach.append(f"afade=t=in:st=0:d={min(c.fade_in, d):.3f}")
+            if c.fade_out > 0:
+                ach.append(f"afade=t=out:st={max(0, d - c.fade_out):.3f}:d={min(c.fade_out, d):.3f}")
+            ach += [f"apad=whole_dur={d}", f"atrim=0:{d}", "asetpts=PTS-STARTPTS"]
+            filters.append(f"[{idx}:a]{','.join(ach)}[a{i}]")
         else:
             filters.append(f"anullsrc=r=48000:cl=stereo,atrim=0:{d}[a{i}]")
-        concat_inputs.append(f"[v{i}][a{i}]")
-    filters.append(f"{''.join(concat_inputs)}concat=n={len(plan.clips)}:v=1:a=1[vcat][acat]")
+        vlabels.append(f"v{i}")
+        alabels.append(f"a{i}")
+        durs.append(d)
 
-    # Video post-processing: overlays then subtitles.
+    has_transition = any(plan.transition_overlap(i) > 0 for i in range(len(plan.clips)))
+    if not has_transition:
+        filters.append("".join(f"[{v}][{a}]" for v, a in zip(vlabels, alabels))
+                       + f"concat=n={len(plan.clips)}:v=1:a=1[vmain][amain]")
+    else:
+        vacc, aacc, acc_d = vlabels[0], alabels[0], durs[0]
+        for i in range(1, len(plan.clips)):
+            ov = round(plan.transition_overlap(i), 3)
+            vo, ao = f"vx{i}", f"ax{i}"
+            if ov > 0:
+                tr = plan.clips[i].transition_in
+                filters.append(f"[{vacc}][{vlabels[i]}]xfade=transition={tr.type}:duration={ov}"
+                               f":offset={max(0.0, acc_d - ov):.3f}[{vo}]")
+                filters.append(f"[{aacc}][{alabels[i]}]acrossfade=d={ov}:c1=tri:c2=tri[{ao}]")
+            else:
+                filters.append(f"[{vacc}][{aacc}][{vlabels[i]}][{alabels[i]}]concat=n=2:v=1:a=1[{vo}][{ao}]")
+            vacc, aacc = vo, ao
+            acc_d = acc_d + durs[i] - ov
+        filters.append(f"[{vacc}]null[vmain]")
+        filters.append(f"[{aacc}]anull[amain]")
+
+    # -- b-roll / picture-in-picture ------------------------------------------------
+    vcur = "vmain"
+    extra_audio: list[tuple[str, bool]] = []  # (label, duck)
+    for k, b in enumerate(sorted(plan.broll, key=lambda b: b.timeline_start)):
+        src = project.sources.get(b.source_id)
+        if src is None or src.kind != "video":
+            warnings.append(f"B-roll {b.id} skipped: source missing or has no picture")
+            continue
+        if b.timeline_start >= total:
+            continue
+        d = round(min(b.duration, total - b.timeline_start), 3)
+        args += ["-ss", f"{b.start:.3f}", "-t", f"{d:.3f}", "-i", src.path]
+        idx = n_in
+        n_in += 1
+        if b.mode == "pip":
+            pw = _even(width * b.pip_scale)
+            chain = [f"scale={pw}:-2"]
+        else:
+            chain, _ = fit_chain(width, height, "crop" if plan.output.aspect != "original" else "pad",
+                                 plan.output.aspect if plan.output.aspect != "original" else "x")
+        chain = ["setpts=PTS-STARTPTS"] + chain + look_chain(b.look) + [f"fps={fps}", "format=yuva420p",
+                                                                       f"trim=duration={d}"]
+        fd = min(b.fade, d / 3)
+        if fd > 0:
+            chain += [f"fade=t=in:st=0:d={fd:.3f}:alpha=1", f"fade=t=out:st={d - fd:.3f}:d={fd:.3f}:alpha=1"]
+        chain.append(f"setpts=PTS+{b.timeline_start:.3f}/TB")
+        filters.append(f"[{idx}:v]{','.join(chain)}[bv{k}]")
+        x, y = PIP_POS[b.pip_corner] if b.mode == "pip" else ("0", "0")
+        filters.append(f"[{vcur}][bv{k}]overlay=x={x}:y={y}:eof_action=pass"
+                       f":enable='between(t,{b.timeline_start:.3f},{b.timeline_start + d:.3f})'[vb{k}]")
+        vcur = f"vb{k}"
+        if b.volume > 0 and src.has_audio:
+            ms = int(b.timeline_start * 1000)
+            filters.append(f"[{idx}:a]asetpts=PTS-STARTPTS,{AUDIO_FMT},atrim=0:{d},volume={b.volume:.3f},"
+                           f"adelay={ms}|{ms}[ba{k}]")
+            extra_audio.append((f"ba{k}", False))
+
+    # -- audio track (music, voice-over, sfx) ------------------------------------------
+    for k, au in enumerate(sorted(plan.audio, key=lambda a: a.timeline_start)):
+        src = project.sources.get(au.source_id)
+        if src is None or not src.has_audio:
+            warnings.append(f"Audio {au.id} skipped: source missing or silent")
+            continue
+        if au.timeline_start >= total:
+            continue
+        d = round(min(au.duration, total - au.timeline_start), 3)
+        args += ["-ss", f"{au.start:.3f}", "-t", f"{d:.3f}", "-i", src.path]
+        idx = n_in
+        n_in += 1
+        ch = ["asetpts=PTS-STARTPTS", AUDIO_FMT, f"atrim=0:{d}", f"volume={au.volume:.3f}"]
+        if au.fade_in > 0:
+            ch.append(f"afade=t=in:st=0:d={min(au.fade_in, d / 2):.3f}")
+        if au.fade_out > 0:
+            fo = min(au.fade_out, d / 2)
+            ch.append(f"afade=t=out:st={d - fo:.3f}:d={fo:.3f}")
+        ms = int(au.timeline_start * 1000)
+        ch.append(f"adelay={ms}|{ms}")
+        filters.append(f"[{idx}:a]{','.join(ch)}[mu{k}]")
+        extra_audio.append((f"mu{k}", au.duck and au.role == "music"))
+
+    acur = "amain"
+    if extra_audio:
+        ducked = [lbl for lbl, dk in extra_audio if dk]
+        free = [lbl for lbl, dk in extra_audio if not dk]
+        mix_inputs = []
+        if ducked:
+            filters.append(f"[{acur}]asplit=2[amx][asc]")
+            acur = "amx"
+            if len(ducked) > 1:
+                filters.append("".join(f"[{l}]" for l in ducked)
+                               + f"amix=inputs={len(ducked)}:duration=longest:normalize=0[bed]")
+                bed = "bed"
+            else:
+                bed = ducked[0]
+            filters.append(f"[{bed}][asc]sidechaincompress=threshold=0.02:ratio=10:attack=15:release=350"
+                           f":makeup=1[bedd]")
+            mix_inputs.append("bedd")
+        mix_inputs += free
+        filters.append(f"[{acur}]" + "".join(f"[{l}]" for l in mix_inputs)
+                       + f"amix=inputs={1 + len(mix_inputs)}:duration=first:dropout_transition=0:normalize=0[amixed]")
+        acur = "amixed"
+
+    # -- text overlays and subtitles ---------------------------------------------------
     vchain: list[str] = []
     font = config.overlay_font()
     if plan.overlays:
@@ -281,18 +583,7 @@ def compile_plan(project: Project, plan: EditPlan, project_dir: Path, out_rel: s
             local_font = cache / f"overlay_font{Path(font).suffix}"
             if not local_font.exists():
                 shutil.copy(font, local_font)
-            for k, ov in enumerate(plan.overlays):
-                size = max(10, int(ov.font_size * scale))
-                max_chars = max(8, int(width * 0.88 / (size * 0.58)))
-                tfile = cache / f"overlay_{k}.txt"
-                tfile.write_text(wrap_text(ov.text, max_chars))
-                y = {"top": "h*0.08", "center": "(h-text_h)/2", "bottom": "h*0.78-text_h"}[ov.position]
-                box = (f":box=1:boxcolor=black@0.55:boxborderw={max(4, int(size * 0.35))}"
-                       if ov.background else ":borderw=3:bordercolor=black@0.8")
-                vchain.append(
-                    f"drawtext=fontfile=cache/{local_font.name}:textfile=cache/{tfile.name}:expansion=none"
-                    f":fontsize={size}:fontcolor=0x{color_hex(ov.color)}:line_spacing={int(size * 0.25)}"
-                    f":x=(w-text_w)/2:y={y}{box}:enable='between(t,{ov.start:.3f},{ov.end:.3f})'")
+            vchain += _overlay_filters(plan, width, height, scale, cache, f"cache/{local_font.name}")
     if plan.subtitles.enabled:
         words, missing = timeline_words(project, plan, project_dir)
         if missing:
@@ -301,13 +592,15 @@ def compile_plan(project: Project, plan: EditPlan, project_dir: Path, out_rel: s
             sub_file = cache / "subtitles.ass"
             sub_file.write_text(build_ass(plan, words, width, height))
             vchain.append(f"ass=cache/{sub_file.name}")
-    filters.append(f"[vcat]{','.join(vchain) if vchain else 'null'}[vout]")
+    vchain.append("format=yuv420p")
+    filters.append(f"[{vcur}]{','.join(vchain)}[vout]")
 
     achain = [f"volume={plan.output.master_volume:.3f}"]
     if plan.output.normalize_audio:
         achain.append("loudnorm=I=-14:TP=-1.5:LRA=11")
         achain.append("aresample=48000")
-    filters.append(f"[acat]{','.join(achain)}[aout]")
+    achain.append(f"atrim=0:{total}")
+    filters.append(f"[{acur}]{','.join(achain)}[aout]")
 
     preset, crf, abr = QUALITY["preview" if preview else quality]
     args += [
@@ -315,9 +608,10 @@ def compile_plan(project: Project, plan: EditPlan, project_dir: Path, out_rel: s
         "-map", "[vout]", "-map", "[aout]",
         "-c:v", "libx264", "-preset", preset, "-crf", crf, "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", abr, "-ar", "48000",
+        "-t", f"{total:.3f}",
         "-movflags", "+faststart", out_rel,
     ]
-    return CompiledRender(args, round(plan.duration(), 3), width, height, warnings)
+    return CompiledRender(args, total, width, height, warnings)
 
 
 def render(project: Project, project_dir: Path, mode: str = "preview", quality: str = "standard",

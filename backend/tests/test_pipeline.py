@@ -147,7 +147,7 @@ def test_chat_without_key(project):
     r = client.post(f"/api/projects/{project}/chat", json={"message": "make it 9:16"})
     wait_job(r.json()["job"]["id"])
     chat = client.get(f"/api/projects/{project}/chat").json()
-    assert chat[-1]["role"] == "error" and "ANTHROPIC_API_KEY" in chat[-1]["text"]
+    assert chat[-1]["role"] == "error" and "GROQ_API_KEY" in chat[-1]["text"]
 
 
 def test_tool_schemas_exported():

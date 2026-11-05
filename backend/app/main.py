@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from . import auth, config
 from .agent import agent
 from .jobs import jobs
-from .media import analysis, ffmpeg
+from .media import analysis, ffmpeg, prep
 from .models import Source, new_id
 from .render import compiler
 from .storage import NotFound, store
@@ -45,6 +45,8 @@ def _project_view(project_id: str) -> dict:
     pw, ph = compiler.output_dimensions(project, plan, preview=True)
     data = project.model_dump()
     data["timeline"] = [pc.__dict__ for pc in compiler.place_clips(plan)]
+    data["can_undo"] = project.undo_index > 0
+    data["can_redo"] = 0 <= project.undo_index < len(project.undo_stack) - 1
     data["duration"] = round(plan.duration(), 3)
     data["output_size"] = [ow, oh]
     data["preview_size"] = [pw, ph]
@@ -52,7 +54,13 @@ def _project_view(project_id: str) -> dict:
         data["sources"][sid]["has_transcript"] = analysis.load_transcript(
             pdir / "analysis", pdir / src.path) is not None
         data["sources"][sid]["url"] = f"/files/{project_id}/{src.path}"
-        data["sources"][sid]["thumbnail_url"] = f"/files/{project_id}/frames/thumb_{sid}.jpg"
+        data["sources"][sid]["thumbnail_url"] = (f"/files/{project_id}/frames/thumb_{sid}.jpg"
+                                                 if src.kind == "video" else None)
+        data["sources"][sid]["proxy_url"] = f"/files/{project_id}/{src.proxy_path}" if src.proxy_path else None
+        data["sources"][sid]["filmstrip_url"] = (f"/files/{project_id}/{src.filmstrip_path}"
+                                                 if src.filmstrip_path else None)
+        data["sources"][sid]["waveform_url"] = (f"/files/{project_id}/{src.waveform_path}"
+                                                if src.waveform_path else None)
     for r in data["renders"]:
         r["url"] = f"/files/{project_id}/{r['path']}"
     return data
@@ -71,8 +79,10 @@ def health() -> dict:
     except ImportError:
         whisper = False
     return {"ok": True, "ffmpeg": ver, "whisper_installed": whisper,
-            "whisper_model": config.WHISPER_MODEL, "claude_configured": config.anthropic_configured(),
-            "claude_model": config.CLAUDE_MODEL, "overlay_font": config.overlay_font(),
+            "whisper_model": config.WHISPER_MODEL, "ai_provider": config.ai_provider(),
+            "ai_configured": config.ai_configured(), "ai_model": config.ai_model(),
+            "claude_configured": config.anthropic_configured(), "claude_model": config.CLAUDE_MODEL,
+            "overlay_font": config.overlay_font(),
             "tools": len(registry.all())}
 
 
@@ -110,7 +120,8 @@ async def upload_source(project_id: str, file: UploadFile = File(...),
     store.load(project_id)
     ext = Path(file.filename or "").suffix.lower()
     if ext not in config.ALLOWED_UPLOAD_EXTENSIONS:
-        raise HTTPException(400, f"Unsupported file type '{ext}'. Upload MP4 or MOV.")
+        raise HTTPException(400, f"Unsupported file type '{ext}'. Upload MP4, MOV or WebM video, "
+                                 "or MP3, WAV, M4A, AAC or OGG audio.")
     sid = new_id("src")
     rel = f"sources/{sid}{ext}"
     dest = pdir / rel
@@ -127,23 +138,63 @@ async def upload_source(project_id: str, file: UploadFile = File(...),
         meta = ffmpeg.summarize_probe(ffmpeg.probe(dest))
     except ffmpeg.MediaError as exc:
         dest.unlink(missing_ok=True)
-        raise HTTPException(400, f"Could not read the video: {exc}") from exc
+        raise HTTPException(400, f"Could not read the file: {exc}") from exc
     dest.chmod(0o444)  # originals are read-only from here on
-    source = Source(id=sid, filename=file.filename or dest.name, path=rel, duration=meta["duration"],
+    source = Source(id=sid, filename=file.filename or dest.name, path=rel, kind=meta["kind"],
+                    duration=meta["duration"],
                     width=meta["width"], height=meta["height"], fps=meta["fps"],
                     has_audio=meta["has_audio"], video_codec=meta["video_codec"],
                     audio_codec=meta["audio_codec"], size_bytes=size, rotation=meta["rotation"])
-    try:
-        ffmpeg.extract_frame(dest, min(1.0, meta["duration"] / 2), pdir / "frames" / f"thumb_{sid}.jpg",
-                             width=320)
-    except ffmpeg.MediaError:
-        pass
+    if source.kind == "video":
+        try:
+            ffmpeg.extract_frame(dest, min(1.0, meta["duration"] / 2), pdir / "frames" / f"thumb_{sid}.jpg",
+                                 width=320)
+        except ffmpeg.MediaError:
+            pass
     with store.edit(project_id) as project:
         project.sources[sid] = source
-    store.log(project_id, "upload", source_id=sid, filename=source.filename, bytes=size)
+    store.log(project_id, "upload", source_id=sid, filename=source.filename, bytes=size, kind=source.kind)
     if add_to_timeline:
-        registry.execute(project_id, "add_clip", {"source_id": sid}, actor="user")
+        if source.kind == "video":
+            registry.execute(project_id, "add_clip", {"source_id": sid}, actor="user")
+        elif store.load(project_id).plan.clips:
+            registry.execute(project_id, "add_audio", {"source_id": sid}, actor="user")
+    _start_prep(project_id, sid)
     return {"source": source.model_dump(), "project": _project_view(project_id)}
+
+
+def _start_prep(project_id: str, sid: str):
+    def work(ctx):
+        src = store.load(project_id).sources[sid]
+        fields = prep.prepare(store.project_dir(project_id), src, on_note=ctx.note)
+        with store.edit(project_id) as project:
+            if sid in project.sources:
+                for k, v in fields.items():
+                    setattr(project.sources[sid], k, v)
+        return fields
+    return jobs.submit(project_id, "prep", "Preparing media", work)
+
+
+@app.post("/api/projects/{project_id}/undo")
+def undo(project_id: str) -> dict:
+    store.step(project_id, -1)
+    store.log(project_id, "undo")
+    return _project_view(project_id)
+
+
+@app.post("/api/projects/{project_id}/redo")
+def redo(project_id: str) -> dict:
+    store.step(project_id, +1)
+    store.log(project_id, "redo")
+    return _project_view(project_id)
+
+
+@app.get("/api/projects/{project_id}/captions")
+def captions(project_id: str) -> list[dict]:
+    """Subtitle words already mapped onto the output timeline, for the live preview."""
+    project = store.load(project_id)
+    words, _ = compiler.timeline_words(project, project.plan, store.project_dir(project_id))
+    return words
 
 
 # ---- tools ---------------------------------------------------------------------

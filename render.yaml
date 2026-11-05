@@ -7,7 +7,7 @@ services:
     dockerfilePath: ./Dockerfile
     healthCheckPath: /api/health
     envVars:
-      - key: ANTHROPIC_API_KEY
+      - key: GROQ_API_KEY        # free key from console.groq.com/keys (AI editor + fast captions)
         sync: false
       - key: APP_PASSWORD
         sync: false

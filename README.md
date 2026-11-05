@@ -10,32 +10,36 @@ pinned: false
 
 # AI Video Editor
 
-Upload footage, describe the edit in plain language, and let Claude plan and apply it with real
-editing tools (FFmpeg, Whisper, PySceneDetect). Every edit is non-destructive and versioned, so you
-can preview, revise, or roll back at any point, and export for TikTok, Reels, Shorts or YouTube.
-
-Architecture and roadmap: see the "AI Video Editor: Architecture and Roadmap" doc in the project
-(https://claude.ai/artifact/25wX2a92NZq7T8WYPmfJUu).
+Upload footage, edit it on a multi-track timeline with an instant in-browser preview, or describe the
+edit in plain language and let the AI editor apply it with real tools (FFmpeg, Whisper, PySceneDetect).
+Every edit is non-destructive, versioned and undoable, and exports for TikTok, Reels, Shorts or YouTube.
+The AI runs on Groq's free tier, so the whole app can be used without paying for anything.
 
 ## What works today
 
 | Area | Features |
 | --- | --- |
-| Footage | Upload MP4/MOV/M4V (drag and drop), metadata and thumbnails, originals stored read-only |
-| Editing | Trim, split, cut a time range, delete, reorder, combine clips from several sources, per-clip and master volume, loudness normalization |
-| Analysis | Silence detection, Whisper transcription with word timestamps, scene detection, frame sampling (Claude sees the frames), render validation (duration, streams, black frames, clipping) |
-| Automatic edits | Remove pauses, burned-in subtitles with the spoken word highlighted, text overlays |
-| Formats | 9:16 (TikTok, Reels, Shorts), 16:9 (YouTube), 4:5, 1:1, original; crop to fill or letterbox; 480p to 2160p |
-| AI editor | Chat with Claude, optional "show me the plan first" approval, tool calls visible in chat, revisions continue the same conversation |
-| Dashboard | Preview player, timeline with clip/text/subtitle tracks and inspectors, version history with restore, export settings and downloads, job status and processing log |
+| Footage | Upload MP4/MOV/WebM video and MP3/WAV/M4A/AAC/OGG audio; originals stored read-only; light proxies, filmstrips and waveforms generated in the background |
+| Live preview | Plays the edit instantly in the browser (canvas): cuts, speed, color looks, zoom/reframe, transitions, B-roll, picture-in-picture, animated text, styled captions and music ducking, with no render wait. Drag text on the video to place it |
+| Timeline | Text, B-roll, video and music tracks; drag to reorder, drag edges to trim, drag B-roll/music/text to move; snapping, zoom, filmstrips, waveforms; split, delete, undo/redo; keyboard shortcuts |
+| Editing | Trim, split, cut ranges, reorder, combine sources, speed 0.25x-4x (pitch kept), 9 color looks plus brightness/contrast/saturation, zoom and focus point for reframing, fades, 12 transitions |
+| Audio | Per-clip volume and fades, background music / voice-over / sound effects with fades and automatic ducking under speech, loudness normalization |
+| Text and captions | Text with box/outline/shadow/highlight styles and fade/slide/pop/typewriter animations; auto captions in 5 styles (bold highlight, karaoke, boxed, clean, minimal) that follow every cut |
+| Formats | 9:16, 16:9, 4:5, 1:1, original; fill (crop), fit with black bars, or fit over a blurred background; 480p to 2160p |
+| AI editor | Free: an open model on Groq plans and applies edits through the same validated tools (Claude is an optional paid alternative). Optional "show me the plan first" approval |
+
+## Keyboard shortcuts
+
+Space play/pause · S split at playhead · Delete remove selection · Ctrl/Cmd+Z undo · Ctrl/Cmd+Shift+Z redo ·
+Left/Right one frame (Shift = one second) · Home/End · Esc deselect
 
 ## Requirements
 
 - Python 3.11+ and Node.js 20+
 - FFmpeg 6+ with libass and libfreetype on your PATH (`ffmpeg -filters | grep -E "ass|drawtext"`)
   - macOS: `brew install ffmpeg` · Ubuntu: `sudo apt install ffmpeg` · Windows: `winget install ffmpeg`
-- An Anthropic API key for the AI editor (everything else works without one)
-- Internet on first transcription: faster-whisper downloads its model (about 500 MB for `small`) from huggingface.co
+- A free Groq API key for the AI editor and fast captions (https://console.groq.com/keys). Everything else works without it
+- Without a Groq key, captions use local faster-whisper, which downloads its model from huggingface.co on first use
 
 ## Setup
 
@@ -45,7 +49,7 @@ cd backend
 python -m venv .venv
 source .venv/bin/activate            # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env                 # then put your key in ANTHROPIC_API_KEY
+cp .env.example .env                 # then put your free key in GROQ_API_KEY
 uvicorn app.main:app --port 8000
 
 # frontend (second terminal)
@@ -58,7 +62,7 @@ npm run dev                          # http://localhost:3000
 Open http://localhost:3000, drop a video in the Media panel, and try:
 "Remove unnecessary pauses, add subtitles, make the video 9:16, and prepare it for Instagram Reels."
 
-Run the backend tests (they generate their own footage and do not call Claude):
+Run the backend tests (they generate their own footage and fake the AI, so no key or network is needed):
 
 ```bash
 cd backend && python -m pytest -q
@@ -67,12 +71,13 @@ cd backend && python -m pytest -q
 ## Deploy as a website
 
 The repo builds into one Docker image: FastAPI serves the API and the static dashboard from the
-same address, with FFmpeg included. Set a password so a public URL cannot spend your API key.
+same address, with FFmpeg included. Set a password so strangers cannot use your copy.
 
 **Render (free tier):**
 1. Push this folder to a GitHub repo.
 2. On render.com: New > Blueprint, connect GitHub, pick the repo. It reads `render.yaml`.
-3. Fill in `ANTHROPIC_API_KEY` and `APP_PASSWORD` when asked, then Apply. The first build takes about 10 minutes.
+3. Fill in `GROQ_API_KEY` (free) and `APP_PASSWORD` when asked, then Apply. The first build takes about 10 minutes.
+   Already deployed? Add `GROQ_API_KEY` under your service's Environment tab and redeploy.
 4. Open the `https://<name>.onrender.com` link and sign in.
 
 The free plan has 0.1 CPU and 512 MB of RAM: fine for short clips, slow for long ones. It sleeps after
@@ -88,7 +93,7 @@ as usual and open http://localhost:8000.
 ```
 Next.js dashboard ──REST──> FastAPI ──> Tool registry ──> EditPlan (JSON, versioned)
                                  │            │                 │
-                       Claude agent loop      │                 └──> Renderer: plan -> FFmpeg filter graph
+                       AI agent (Groq/Claude) │                 └──> Renderer: plan -> FFmpeg filter graph
                        (Messages API,         └──> Analysis: ffprobe, silencedetect, Whisper, PySceneDetect
                         tool calling)
 ```
@@ -99,41 +104,47 @@ Next.js dashboard ──REST──> FastAPI ──> Tool registry ──> EditPl
 - **Tool registry** (`backend/app/tools/`): every capability is a Pydantic input model plus a
   handler. Inputs are validated (unknown fields rejected), each call is logged to
   `data/projects/<id>/logs/activity.jsonl`, and mutating tools commit a new version. The UI and
-  Claude call the same tools; nothing runs shell commands built from model output.
+  the AI call the same tools; nothing runs shell commands built from model output.
 - **Renderer** (`backend/app/render/compiler.py`): builds one FFmpeg command from the plan.
   User text reaches FFmpeg only through files (`textfile=`, an ASS subtitle file), never through
   the filter graph string.
-- **Agent** (`backend/app/agent/`): a manual tool-use loop on `claude-opus-5-5` with adaptive
-  thinking. The conversation is saved per project, so revision requests keep context.
+- **Live preview** (`frontend/lib/engine.ts`, `frontend/components/LivePlayer.tsx`): draws the plan on
+  a canvas from the sources (or their proxies) using the same timing, framing, look, transition, text
+  and caption rules as the renderer, so editing never waits for FFmpeg.
+- **Agent** (`backend/app/agent/`): by default `groq_agent.py`, built for Groq's free tier
+  (about 8,000 tokens a minute): a compact tool catalogue, one JSON reply per round with a batch of
+  tool calls, a summarized project state and short memory. Set `AI_PROVIDER=anthropic` to use the
+  Claude tool-use loop in `agent.py` instead.
 
 ### Adding a tool
 
 ```python
 # backend/app/tools/edit_tools.py
-class SpeedArgs(ToolInput):
+class MuteArgs(ToolInput):
     clip_id: str
-    factor: float = Field(..., ge=0.25, le=4)
 
-@registry.register("set_clip_speed", "Speed a clip up or down.", SpeedArgs, category="edit", mutates=True)
-def set_clip_speed(ctx: ToolContext, a: SpeedArgs) -> ToolResult:
+@registry.register("mute_clip", "Silence one clip.", MuteArgs, category="edit", mutates=True)
+def mute_clip(ctx: ToolContext, a: MuteArgs) -> ToolResult:
     ...  # change ctx.project.plan, then:
-    return ToolResult({"clip_id": a.clip_id}, label=f"Speed {a.factor}x")
+    return ToolResult({"clip_id": a.clip_id}, label="Muted clip")
 ```
 
-Claude, the API (`POST /api/projects/{id}/tools/set_clip_speed`) and the history pick it up
+The AI, the API (`POST /api/projects/{id}/tools/mute_clip`) and the history pick it up
 automatically. If it needs new render behaviour, extend `compile_plan`.
 
 ## API overview
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/api/health` | FFmpeg, Whisper and Claude status |
+| GET | `/api/health` | FFmpeg, Whisper and AI provider status |
 | GET | `/api/tools` | Tool list with JSON schemas |
 | GET/POST | `/api/projects` | List or create projects |
 | GET | `/api/projects/{id}` | Project, plan, timeline, history, renders |
 | POST | `/api/projects/{id}/sources` | Upload a video (multipart `file`) |
 | POST | `/api/projects/{id}/tools/{name}` | Run a tool (`{"args": {...}}`); long tools return a job |
 | POST | `/api/projects/{id}/versions/{n}/restore` | Restore a version |
+| POST | `/api/projects/{id}/undo`, `/api/projects/{id}/redo` | Step through edits |
+| GET | `/api/projects/{id}/captions` | Caption words on the output timeline (for the live preview) |
 | POST | `/api/projects/{id}/render` | `{"mode": "preview" \| "export", "quality": "draft" \| "standard" \| "high"}` |
 | GET/POST/DELETE | `/api/projects/{id}/chat` | Read, send to, or reset the AI editor |
 | GET | `/api/projects/{id}/jobs`, `/api/jobs/{job_id}`, `/api/projects/{id}/log` | Status and logs |
@@ -150,10 +161,15 @@ The API key is only read by the backend and never sent to the browser.
 - Single server: jobs run in a thread pool in the API process and are not resumed after a restart.
 - Whisper runs on CPU by default; set `WHISPER_DEVICE=cuda` with a GPU, or `WHISPER_MODEL=base` for speed.
 - Previews re-render the whole timeline at 540p; very long projects will want segment caching.
-- Frames Claude looks at are kept in the conversation history, which raises token use on long sessions.
+- The free Groq models cannot look at video frames, so framing decisions by the AI use the focus
+  controls and the transcript rather than vision. Claude (paid) can sample frames.
+- Groq's free tier allows a few requests a minute; long multi-step requests may pause briefly for the
+  rate limit, which the editor waits out automatically.
+- The live preview is close to the export but not pixel identical (fonts and color math differ
+  slightly); "Rendered file" shows the exact FFmpeg result.
 
-## Next steps (Phase 5)
+## Next steps (stage 2: a smarter AI editor)
 
-MCP server over the same registry (so Claude Desktop and Claude Code can drive projects), a
-DaVinci Resolve handoff, filler-word removal from transcripts, style presets, highlight
-extraction, B-roll and music with beat sync, and subject-tracking auto-reframe.
+Highlight and hook detection from the transcript, filler-word removal ("um", "uh"), face-tracking
+auto-reframe, music beat sync, automatic B-roll suggestions, a self-review pass on the rendered file,
+an MCP server over the same registry, and a DaVinci Resolve handoff.

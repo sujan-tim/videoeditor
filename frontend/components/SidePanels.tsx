@@ -57,7 +57,7 @@ export function ExportPanel({
 }: {
   project: Project;
   jobs: Job[];
-  run: (tool: string, args?: Record<string, unknown>) => Promise<void>;
+  run: (tool: string, args?: Record<string, unknown>) => Promise<unknown>;
   onError: (e: string) => void;
   onChange: () => void;
 }) {
@@ -88,6 +88,7 @@ export function ExportPanel({
           <select value={out.fit} onChange={(e) => run("set_output_format", { fit: e.target.value })} className="rounded border border-zinc-700 bg-zinc-950 px-1 py-1">
             <option value="crop">fill (crop)</option>
             <option value="pad">fit (black bars)</option>
+            <option value="blur">fit (blurred background)</option>
           </select>
           <select value={out.resolution} onChange={(e) => run("set_output_format", { resolution: e.target.value })} className="rounded border border-zinc-700 bg-zinc-950 px-1 py-1">
             {["2160p", "1080p", "720p", "480p"].map((r) => (

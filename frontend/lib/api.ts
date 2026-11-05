@@ -11,6 +11,7 @@ export type Source = {
   id: string;
   filename: string;
   path: string;
+  kind: "video" | "audio" | "image";
   duration: number;
   width: number;
   height: number;
@@ -21,10 +22,64 @@ export type Source = {
   size_bytes: number;
   has_transcript: boolean;
   url: string;
-  thumbnail_url: string;
+  thumbnail_url: string | null;
+  proxy_url: string | null;
+  filmstrip_url: string | null;
+  filmstrip_interval: number;
+  waveform_url: string | null;
+  waveform_rate: number;
 };
 
-export type Clip = { id: string; source_id: string; start: number; end: number; volume: number };
+export const LOOKS = ["none", "bw", "warm", "cool", "vintage", "vivid", "faded", "cinematic", "dramatic"] as const;
+export type Look = (typeof LOOKS)[number];
+export const TRANSITIONS = ["fade", "dissolve", "fadeblack", "fadewhite", "slideleft", "slideright", "slideup", "wipeleft", "wiperight", "circleopen", "zoomin", "smoothleft"] as const;
+export type TransitionType = (typeof TRANSITIONS)[number];
+
+export type Clip = {
+  id: string;
+  source_id: string;
+  start: number;
+  end: number;
+  volume: number;
+  speed: number;
+  look: Look;
+  adjust: { brightness: number; contrast: number; saturation: number };
+  zoom: number;
+  focus_x: number;
+  focus_y: number;
+  transition_in: { type: TransitionType; duration: number } | null;
+  fade_in: number;
+  fade_out: number;
+};
+
+export type Corner = "top_left" | "top_right" | "bottom_left" | "bottom_right";
+
+export type Broll = {
+  id: string;
+  source_id: string;
+  timeline_start: number;
+  start: number;
+  end: number;
+  mode: "full" | "pip";
+  pip_corner: Corner;
+  pip_scale: number;
+  volume: number;
+  look: Look;
+  fade: number;
+};
+
+export type AudioItem = {
+  id: string;
+  source_id: string;
+  timeline_start: number;
+  start: number;
+  end: number;
+  volume: number;
+  fade_in: number;
+  fade_out: number;
+  duck: boolean;
+  role: "music" | "voiceover" | "sfx";
+};
 
 export type PlacedClip = {
   index: number;
@@ -35,9 +90,15 @@ export type PlacedClip = {
   timeline_start: number;
   timeline_end: number;
   volume: number;
+  speed: number;
+  overlap_in: number;
 };
 
 export type Position = "top" | "center" | "bottom";
+export const TEXT_STYLES = ["box", "outline", "shadow", "plain", "highlight"] as const;
+export type TextStyle = (typeof TEXT_STYLES)[number];
+export const TEXT_ANIMATIONS = ["none", "fade", "slide_up", "pop", "typewriter"] as const;
+export type TextAnimation = (typeof TEXT_ANIMATIONS)[number];
 
 export type TextOverlay = {
   id: string;
@@ -45,13 +106,21 @@ export type TextOverlay = {
   start: number;
   end: number;
   position: Position;
+  x: number | null;
+  y: number | null;
   font_size: number;
   color: string;
   background: boolean;
+  style: TextStyle;
+  animation: TextAnimation;
 };
+
+export const CAPTION_STYLES = ["bold_highlight", "karaoke", "boxed", "clean", "minimal"] as const;
+export type CaptionStyle = (typeof CAPTION_STYLES)[number];
 
 export type Subtitles = {
   enabled: boolean;
+  style: CaptionStyle;
   font_size: number;
   position: Position;
   max_words_per_line: number;
@@ -61,12 +130,17 @@ export type Subtitles = {
 
 export type Output = {
   aspect: "original" | "9:16" | "16:9" | "1:1" | "4:5";
-  fit: "pad" | "crop";
+  fit: "pad" | "crop" | "blur";
   resolution: "2160p" | "1080p" | "720p" | "480p";
   master_volume: number;
   normalize_audio: boolean;
   platform?: string | null;
+  background_color?: string;
 };
+
+export type Plan = { clips: Clip[]; broll: Broll[]; audio: AudioItem[]; overlays: TextOverlay[]; subtitles: Subtitles; output: Output };
+
+export type Word = { start: number; end: number; word: string };
 
 export type Version = { version: number; label: string; actor: "user" | "agent" | "system"; tool?: string; created_at: number };
 
@@ -88,7 +162,7 @@ export type Project = {
   id: string;
   name: string;
   sources: Record<string, Source>;
-  plan: { clips: Clip[]; overlays: TextOverlay[]; subtitles: Subtitles; output: Output };
+  plan: Plan;
   version: number;
   history: Version[];
   renders: Render[];
@@ -97,6 +171,8 @@ export type Project = {
   duration: number;
   output_size: [number, number];
   preview_size: [number, number];
+  can_undo: boolean;
+  can_redo: boolean;
 };
 
 export type ProjectListItem = { id: string; name: string; created_at: number; version: number; sources: number; duration: number };
@@ -126,7 +202,15 @@ export type ChatMessage = {
   images?: string[];
 };
 
-export type Health = { ok: boolean; ffmpeg: string; whisper_installed: boolean; claude_configured: boolean; claude_model: string; tools: number };
+export type Health = {
+  ok: boolean;
+  ffmpeg: string;
+  whisper_installed: boolean;
+  ai_configured: boolean;
+  ai_provider: string;
+  ai_model: string;
+  tools: number;
+};
 
 export type LogEntry = { ts: number; event: string; tool?: string; actor?: string; error?: string; [k: string]: unknown };
 
@@ -164,16 +248,19 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ args }),
     }),
+  undo: (id: string) => request<Project>(`/api/projects/${id}/undo`, { method: "POST" }),
+  redo: (id: string) => request<Project>(`/api/projects/${id}/redo`, { method: "POST" }),
+  captions: (id: string) => request<Word[]>(`/api/projects/${id}/captions`),
   restore: (id: string, version: number) => request<Project>(`/api/projects/${id}/versions/${version}/restore`, { method: "POST" }),
   render: (id: string, mode: "preview" | "export", quality = "standard") =>
     request<{ job: Job }>(`/api/projects/${id}/render`, { method: "POST", body: JSON.stringify({ mode, quality }) }),
 };
 
-export function upload(projectId: string, file: File, onProgress: (p: number) => void): Promise<void> {
+export function upload(projectId: string, file: File, onProgress: (p: number) => void, addToTimeline = true): Promise<void> {
   return new Promise((resolve, reject) => {
     const form = new FormData();
     form.append("file", file);
-    form.append("add_to_timeline", "true");
+    form.append("add_to_timeline", addToTimeline ? "true" : "false");
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE}/api/projects/${projectId}/sources`);
     xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);

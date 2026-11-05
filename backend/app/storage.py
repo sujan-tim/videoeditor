@@ -54,7 +54,9 @@ class ProjectStore:
         pdir = self.project_dir(project.id)
         for sub in SUBDIRS:
             (pdir / sub).mkdir(parents=True, exist_ok=True)
-        self._commit(project, "Project created", "system", None, None)
+        self._commit(project, "Project created", "system", None, None, undo_move=True)
+        project.undo_stack, project.undo_index = [project.version], 0
+        self.save(project)
         return project
 
     def list(self) -> list[Project]:
@@ -89,7 +91,15 @@ class ProjectStore:
 
     # ---- versions ----------------------------------------------------------
     def _commit(self, project: Project, label: str, actor: str, tool: str | None,
-                args: dict | None) -> VersionInfo:
+                args: dict | None, undo_move: bool = False) -> VersionInfo:
+        if not undo_move:
+            # A fresh edit: drop any redo states and push this one.
+            if not project.undo_stack:
+                project.undo_stack = [project.version]
+                project.undo_index = 0
+            project.undo_stack = project.undo_stack[: project.undo_index + 1] + [project.version + 1]
+            project.undo_stack = project.undo_stack[-200:]
+            project.undo_index = len(project.undo_stack) - 1
         project.version += 1
         info = VersionInfo(version=project.version, label=label, actor=actor, tool=tool, args=args)
         project.history.append(info)
@@ -105,6 +115,8 @@ class ProjectStore:
 
     def load_version(self, project_id: str, version: int) -> EditPlan:
         vfile = self.project_dir(project_id) / "versions" / f"{int(version)}.json"
+        if int(version) == 0 and not vfile.exists():
+            return EditPlan()
         if not vfile.exists():
             raise NotFound(f"version {version}")
         return EditPlan.model_validate_json(vfile.read_text())
@@ -115,6 +127,23 @@ class ProjectStore:
             project.plan = self.load_version(project_id, version)
             self._commit(project, f"Restored version {version}", actor, "restore_version",
                          {"version": version})
+            return project
+
+    def step(self, project_id: str, direction: int, actor: str = "user") -> Project:
+        """Undo (direction -1) or redo (+1). Each step is recorded as a new version so the
+        history stays append-only, while the undo pointer walks the edit states."""
+        with self.lock(project_id):
+            project = self.load(project_id)
+            target = project.undo_index + direction
+            if not project.undo_stack or target < 0 or target >= len(project.undo_stack):
+                raise NotFound("nothing to " + ("undo" if direction < 0 else "redo"))
+            # Label with the edit being undone or redone.
+            moved = project.undo_stack[project.undo_index if direction < 0 else target]
+            what = next((h.label for h in project.history if h.version == moved), f"version {moved}")
+            project.plan = self.load_version(project_id, project.undo_stack[target])
+            project.undo_index = target
+            self._commit(project, ("Undo: " if direction < 0 else "Redo: ") + what, actor,
+                         "undo" if direction < 0 else "redo", None, undo_move=True)
             return project
 
     # ---- logs --------------------------------------------------------------

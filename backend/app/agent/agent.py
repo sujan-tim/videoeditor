@@ -106,6 +106,16 @@ def _client():
 
 
 def run_agent(project_id: str, user_text: str, require_approval: bool, job: JobContext) -> dict:
+    if config.ai_provider() == "groq":
+        from . import groq_agent
+
+        with store.edit(project_id) as project:
+            project.pending_plan = None
+        return groq_agent.run(project_id, user_text, require_approval, job, append_chat, _summarize)
+    return _run_claude(project_id, user_text, require_approval, job)
+
+
+def _run_claude(project_id: str, user_text: str, require_approval: bool, job: JobContext) -> dict:
     import anthropic
 
     conv_path = _agent_dir(project_id) / "conversation.json"
@@ -208,5 +218,5 @@ def run_agent(project_id: str, user_text: str, require_approval: bool, job: JobC
 
 def reset_conversation(project_id: str) -> None:
     d = _agent_dir(project_id)
-    for name in ("conversation.json", "chat.json"):
+    for name in ("conversation.json", "chat.json", "groq_history.json"):
         (d / name).unlink(missing_ok=True)
